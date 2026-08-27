@@ -67,10 +67,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const getTeamSlotInfo = (team: any) => {
     const ps = problemStatements.find(p => p.id === team.allocated_ps_id);
     
-    // Batch either from team override or from problem statement
+    // Priority: team batch override or problem statement batch or day/session
     let batch = team.batch || ps?.batch;
-    let day = team.presentation_day || ps?.presentation_day;
-    let session = team.session || ps?.session;
+    let day = team.presentation_day || ps?.presentation_day || '31st August';
+    let session = team.session || ps?.session || 'FN';
     
     if (batch) {
       if (batch.startsWith('Day 1')) {
@@ -84,23 +84,21 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         session = batch.includes('AN') ? 'AN' : 'FN';
       }
     } else {
-      day = day || '31st August';
-      session = session || 'FN';
       batch = getBatchFromDaySession(day, session);
     }
     
-    let defaultType = 'PPT';
-    if (batch.startsWith('Day 1')) {
-      defaultType = session === 'FN' ? (evalSettings?.day1_fn_type || 'PPT') : (evalSettings?.day1_an_type || 'Prototype');
-    } else if (batch.startsWith('Day 2')) {
-      defaultType = session === 'FN' ? (evalSettings?.day2_fn_type || 'Prototype') : (evalSettings?.day2_an_type || 'PPT');
-    } else if (batch.startsWith('Day 3')) {
-      defaultType = session === 'FN' ? (evalSettings?.day3_fn_type || 'PPT') : (evalSettings?.day3_an_type || 'Prototype');
+    // Dynamically calculate the session mode from Day & Session Schedule (evalSettings)
+    let currentType = 'PPT';
+    const normDay = getDayNormalized(day);
+    if (normDay === '31st August') {
+      currentType = session === 'FN' ? (evalSettings?.day1_fn_type || 'PPT') : (evalSettings?.day1_an_type || 'Prototype');
+    } else if (normDay === '1st September') {
+      currentType = session === 'FN' ? (evalSettings?.day2_fn_type || 'Prototype') : (evalSettings?.day2_an_type || 'PPT');
+    } else if (normDay === '2nd September') {
+      currentType = session === 'FN' ? (evalSettings?.day3_fn_type || 'PPT') : (evalSettings?.day3_an_type || 'Prototype');
     }
-    const sessionType = team.session_type || ps?.session_type || defaultType;
 
     let dayNum = 'Day 1';
-    const normDay = getDayNormalized(day);
     if (normDay === '1st September') dayNum = 'Day 2';
     else if (normDay === '2nd September') dayNum = 'Day 3';
     const badgeLabel = `${dayNum}/${session}`;
@@ -108,7 +106,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     return {
       day,
       session,
-      sessionType,
+      sessionType: currentType,
       batch,
       badgeLabel,
       roomNumber: ps?.room_number || '-'
