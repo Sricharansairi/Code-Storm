@@ -476,7 +476,6 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const [selectedExportBatch, setSelectedExportBatch] = useState('ALL');
 
   const handleExportEvaluationsByBatch = (targetBatch: string = selectedExportBatch) => {
-    const exportData: any[] = [];
     const activeTeams = teams.filter(t => t.allocated_ps_id && !t.is_disabled);
     
     const filteredTeams = targetBatch === 'ALL' 
@@ -495,17 +494,26 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       return a.team_name.localeCompare(b.team_name);
     });
 
+    const pptRows: any[] = [];
+    const protoRows: any[] = [];
+
     filteredTeams.forEach((t, index) => {
       const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
       const evalData = evaluations.find(e => e.team_id === t.id);
       const slot = getTeamSlotInfo(t);
 
-      exportData.push({
-        'Sl No': index + 1,
-        'Batch': slot.batch,
-        'Presentation Day': slot.day,
-        'Session': slot.session === 'FN' ? 'Morning (FN)' : 'Afternoon (AN)',
-        'Session Type': slot.sessionType,
+      const norm = getDayNormalized(slot.day);
+      let dayFnType = evalSettings?.day1_fn_type || 'PPT';
+      if (norm === '1st September') {
+        dayFnType = evalSettings?.day2_fn_type || 'Prototype';
+      } else if (norm === '2nd September') {
+        dayFnType = evalSettings?.day3_fn_type || 'PPT';
+      }
+
+      const pptSession = dayFnType === 'PPT' ? 'Morning (FN) - 09:30 AM' : 'Afternoon (AN) - 01:30 PM';
+      const protoSession = dayFnType === 'Prototype' ? 'Morning (FN) - 09:30 AM' : 'Afternoon (AN) - 01:30 PM';
+
+      const baseTeamData = {
         'Room Number': slot.roomNumber,
         'Team Name': t.team_name,
         'TL Name': t.tl_name || '-',
@@ -523,16 +531,56 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         'Total Score': evalData ? evalData.total_score : '-',
         'Evaluation Status': evalData ? 'Evaluated' : 'Pending',
         'Evaluated By': evalData ? evalData.evaluated_by : '-'
+      };
+
+      pptRows.push({
+        'Sl No': index + 1,
+        'Batch': slot.batch,
+        'Presentation Day': slot.day,
+        'Session': pptSession,
+        'Evaluation Round': 'PPT Presentation',
+        ...baseTeamData
+      });
+
+      protoRows.push({
+        'Sl No': index + 1,
+        'Batch': slot.batch,
+        'Presentation Day': slot.day,
+        'Session': protoSession,
+        'Evaluation Round': 'Prototype Evaluation',
+        ...baseTeamData
       });
     });
+
+    const workbook = XLSX.utils.book_new();
+    const title = targetBatch === 'ALL' ? 'ALL BATCHES' : targetBatch.toUpperCase();
+
+    // Build worksheet with two stacked tables
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      [`CODE STORM 2026 - ${title} - PPT PRESENTATIONS TABLE`],
+      [`Generated on: ${new Date().toLocaleString()}`],
+      []
+    ]);
+
+    // Table 1: PPT Presentations starting at row 4 (A4)
+    XLSX.utils.sheet_add_json(worksheet, pptRows, { origin: 'A4' });
+
+    // Table 2: Prototype Evaluations starting after Table 1
+    const protoStartRow = pptRows.length + 7;
+    XLSX.utils.sheet_add_aoa(worksheet, [
+      [],
+      [`CODE STORM 2026 - ${title} - PROTOTYPE EVALUATIONS TABLE`],
+      [`Generated on: ${new Date().toLocaleString()}`],
+      []
+    ], { origin: `A${protoStartRow}` });
+
+    XLSX.utils.sheet_add_json(worksheet, protoRows, { origin: `A${protoStartRow + 4}` });
 
     const filename = targetBatch === 'ALL' 
       ? 'CodeStorm_Evaluations_All_Batches.xlsx' 
       : `CodeStorm_Evaluations_${targetBatch.replace(/ /g, '_')}.xlsx`;
     const sheetName = targetBatch === 'ALL' ? 'All_Batches' : targetBatch.replace(/[:\\/?*\[\]]/g, '_');
 
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
     XLSX.writeFile(workbook, filename);
   };
