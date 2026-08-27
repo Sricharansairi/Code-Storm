@@ -72,8 +72,24 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     return `${dayNum} - ${session || 'FN'}`;
   };
 
+  const normalizePS = (str?: string) => {
+    if (!str) return '';
+    return String(str).trim().toLowerCase().replace(/\s+/g, '');
+  };
+
+  const isPSMatch = (id1?: string, id2?: string) => {
+    if (!id1 || !id2) return false;
+    const n1 = normalizePS(id1);
+    const n2 = normalizePS(id2);
+    if (n1 === n2) return true;
+    const digits1 = n1.replace(/^ps/i, '');
+    const digits2 = n2.replace(/^ps/i, '');
+    if (digits1 && digits2 && digits1 === digits2) return true;
+    return false;
+  };
+
   const getTeamSlotInfo = (team: any) => {
-    const ps = problemStatements.find(p => p.id === team.allocated_ps_id);
+    const ps = problemStatements.find(p => isPSMatch(p.id, team.allocated_ps_id));
     
     const rawDay = team.presentation_day || ps?.presentation_day;
     if (!rawDay) {
@@ -127,7 +143,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       isSplit = true;
       // Find all active teams allocated to this PS and sort them deterministically
       const psTeams = teams
-        .filter(t => t.allocated_ps_id === ps?.id && !t.is_disabled)
+        .filter(t => isPSMatch(t.allocated_ps_id, ps?.id))
         .sort((a, b) => a.team_name.localeCompare(b.team_name));
       const teamIdx = psTeams.findIndex(t => t.id === team.id);
       const halfCount = Math.ceil(psTeams.length / 2);
@@ -341,7 +357,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   };
 
   const getPSTeamCount = (psId: string) => {
-    return teams.filter(t => t.allocated_ps_id === psId && !t.is_disabled).length;
+    return teams.filter(t => isPSMatch(t.allocated_ps_id, psId)).length;
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -405,8 +421,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
 
   const filteredEvalTeams = teams.filter(t => {
-    if (t.is_disabled) return false;
-    const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
+    const ps = problemStatements.find(p => isPSMatch(p.id, t.allocated_ps_id));
     if (!ps) return false;
     
     const slot = getTeamSlotInfo(t);
@@ -417,7 +432,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     if (evalFilterBatch !== 'All') {
       if (!slot.isAssigned || slot.batch !== evalFilterBatch) return false;
     }
-    if (evalFilterPS !== 'All' && ps.id !== evalFilterPS) return false;
+    if (evalFilterPS !== 'All' && !isPSMatch(ps.id, evalFilterPS)) return false;
     const isEvaluated = evaluations.some(e => e.team_id === t.id);
     if (evalFilterStatus === 'Evaluated' && !isEvaluated) return false;
     if (evalFilterStatus === 'Pending' && isEvaluated) return false;
@@ -426,7 +441,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
   const handleExportEvaluations = () => {
     const exportData = filteredEvalTeams.map((t: any, index: number) => {
-      const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
+      const ps = problemStatements.find(p => isPSMatch(p.id, t.allocated_ps_id));
       const evalData = evaluations.find(e => e.team_id === t.id);
       const slot = getTeamSlotInfo(t);
       return {
@@ -459,11 +474,11 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const [selectedExportPS, setSelectedExportPS] = useState('ALL');
 
   const handleExportEvaluationsByPS = (targetPS: string = selectedExportPS) => {
-    const activeTeams = teams.filter(t => t.allocated_ps_id && !t.is_disabled);
+    const activeTeams = teams.filter(t => t.allocated_ps_id);
     
-    const filteredTeams = targetPS === 'ALL' 
+    const filteredTeams = (targetPS === 'ALL' || targetPS === 'All')
       ? activeTeams 
-      : activeTeams.filter(t => t.allocated_ps_id === targetPS);
+      : activeTeams.filter(t => isPSMatch(t.allocated_ps_id, targetPS));
 
     if (filteredTeams.length === 0) {
       alert("No active teams found for the selected problem statement.");
@@ -1127,7 +1142,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     if (filterStatus === 'Pending' && t.allocated_ps_id) return false;
     if (filterDept !== 'All' && t.tl_department !== filterDept) return false;
     if (filterYear !== 'All' && t.tl_year !== filterYear) return false;
-    if (filterPS !== 'All' && t.allocated_ps_id !== filterPS) return false;
+    if (filterPS !== 'All' && !isPSMatch(t.allocated_ps_id, filterPS)) return false;
     return true;
   });
 
@@ -2242,11 +2257,11 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
           )}
 
           {activeTab === 'leaderboard' && (() => {
-            const activeTeams = teams.filter(t => t.allocated_ps_id && !t.is_disabled);
+            const activeTeams = teams.filter(t => t.allocated_ps_id);
             
             const ranked = activeTeams
               .map(t => {
-                const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
+                const ps = problemStatements.find(p => isPSMatch(p.id, t.allocated_ps_id));
                 const evalData = evaluations.find(e => e.team_id === t.id);
                 const slot = getTeamSlotInfo(t);
                 const totalScore = evalData ? Number(evalData.total_score) : null;
@@ -2260,7 +2275,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 };
               })
               .filter(item => {
-                if (leaderboardPS !== 'All' && item.ps?.id !== leaderboardPS) return false;
+                if (leaderboardPS !== 'All' && !isPSMatch(item.ps?.id || item.team.allocated_ps_id, leaderboardPS)) return false;
                 if (leaderboardDept !== 'All' && item.team.tl_department !== leaderboardDept) return false;
                 if (leaderboardYear !== 'All' && item.team.tl_year !== leaderboardYear) return false;
                 if (leaderboardSearch) {
