@@ -46,13 +46,13 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   }, []);
 
   const BATCH_OPTIONS = [
-    { id: 'ALL', label: 'All Batches (6 Batches)' },
-    { id: 'Day 1 - FN', label: 'Batch 1: Day 1 - FN (Morning)' },
-    { id: 'Day 1 - AN', label: 'Batch 2: Day 1 - AN (Afternoon)' },
-    { id: 'Day 2 - FN', label: 'Batch 3: Day 2 - FN (Morning)' },
-    { id: 'Day 2 - AN', label: 'Batch 4: Day 2 - AN (Afternoon)' },
-    { id: 'Day 3 - FN', label: 'Batch 5: Day 3 - FN (Morning)' },
-    { id: 'Day 3 - AN', label: 'Batch 6: Day 3 - AN (Afternoon)' },
+    { id: 'ALL', label: 'All Batches / Tracks' },
+    { id: 'Day 1 - Track A', label: 'Day 1: Track A (FN PPT ➔ AN Proto)' },
+    { id: 'Day 1 - Track B', label: 'Day 1: Track B (FN Proto ➔ AN PPT)' },
+    { id: 'Day 2 - Track A', label: 'Day 2: Track A (FN PPT ➔ AN Proto)' },
+    { id: 'Day 2 - Track B', label: 'Day 2: Track B (FN Proto ➔ AN PPT)' },
+    { id: 'Day 3 - Track A', label: 'Day 3: Track A (FN PPT ➔ AN Proto)' },
+    { id: 'Day 3 - Track B', label: 'Day 3: Track B (FN Proto ➔ AN PPT)' },
   ];
 
   const getDayNormalized = (dayStr?: string) => {
@@ -75,49 +75,54 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const getTeamSlotInfo = (team: any) => {
     const ps = problemStatements.find(p => p.id === team.allocated_ps_id);
     
-    // Priority: team batch override or problem statement batch or day/session
-    let batch = team.batch || ps?.batch;
-    let day = team.presentation_day || ps?.presentation_day || '31st August';
-    let session = team.session || ps?.session || 'FN';
-    
-    if (batch) {
-      if (batch.startsWith('Day 1')) {
-        day = '31st August';
-        session = batch.includes('AN') ? 'AN' : 'FN';
-      } else if (batch.startsWith('Day 2')) {
-        day = '1st September';
-        session = batch.includes('AN') ? 'AN' : 'FN';
-      } else if (batch.startsWith('Day 3')) {
-        day = '2nd September';
-        session = batch.includes('AN') ? 'AN' : 'FN';
-      }
-    } else {
-      batch = getBatchFromDaySession(day, session);
-    }
-    
-    // Dynamically calculate the session mode from Day & Session Schedule (evalSettings)
-    let currentType = 'PPT';
+    const day = team.presentation_day || ps?.presentation_day || '31st August';
     const normDay = getDayNormalized(day);
-    if (normDay === '31st August') {
-      currentType = session === 'FN' ? (evalSettings?.day1_fn_type || 'PPT') : (evalSettings?.day1_an_type || 'Prototype');
-    } else if (normDay === '1st September') {
-      currentType = session === 'FN' ? (evalSettings?.day2_fn_type || 'Prototype') : (evalSettings?.day2_an_type || 'PPT');
+    
+    let dayNum = 'Day 1';
+    let pptRoom = evalSettings?.day1_ppt_room || 'C-002';
+    let protoRoom = evalSettings?.day1_proto_room || 'D-013';
+
+    if (normDay === '1st September') {
+      dayNum = 'Day 2';
+      pptRoom = evalSettings?.day2_ppt_room || 'C-002';
+      protoRoom = evalSettings?.day2_proto_room || 'D-013';
     } else if (normDay === '2nd September') {
-      currentType = session === 'FN' ? (evalSettings?.day3_fn_type || 'PPT') : (evalSettings?.day3_an_type || 'Prototype');
+      dayNum = 'Day 3';
+      pptRoom = evalSettings?.day3_ppt_room || 'C-002';
+      protoRoom = evalSettings?.day3_proto_room || 'D-013';
     }
 
-    let dayNum = 'Day 1';
-    if (normDay === '1st September') dayNum = 'Day 2';
-    else if (normDay === '2nd September') dayNum = 'Day 3';
-    const badgeLabel = `${dayNum}/${session}`;
+    // Determine track: Track A (FN PPT -> AN Proto) vs Track B (FN Proto -> AN PPT)
+    const track = ps?.schedule_track || team.schedule_track || (ps?.session === 'AN' ? 'FN_PROTO_AN_PPT' : 'FN_PPT_AN_PROTO');
+    const isTrackA = track !== 'FN_PROTO_AN_PPT';
+
+    const fnMode = isTrackA ? 'PPT' : 'Prototype';
+    const fnRoom = isTrackA ? pptRoom : protoRoom;
+
+    const anMode = isTrackA ? 'Prototype' : 'PPT';
+    const anRoom = isTrackA ? protoRoom : pptRoom;
+
+    const trackName = isTrackA ? 'Track A' : 'Track B';
+    const batch = `${dayNum} - ${trackName}`;
+    const badgeLabel = `${dayNum}/${trackName} (${isTrackA ? 'FN PPT' : 'FN Proto'})`;
 
     return {
-      day,
-      session,
-      sessionType: currentType,
+      day: normDay,
+      dayNum,
+      track,
+      isTrackA,
+      trackName,
       batch,
       badgeLabel,
-      roomNumber: ps?.room_number || '-'
+      pptRoom,
+      protoRoom,
+      fnMode,
+      fnRoom,
+      anMode,
+      anRoom,
+      session: 'FN (09:30 AM) & AN (01:30 PM)',
+      sessionType: `FN: ${fnMode} (${fnRoom}) | AN: ${anMode} (${anRoom})`,
+      roomNumber: `PPT: ${pptRoom} | Proto: ${protoRoom}`
     };
   };
 
@@ -693,40 +698,29 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
   const [savingSchedule, setSavingSchedule] = useState(false);
 
-  const handleAssignPSToBatch = (psId: string, targetBatch: string) => {
-    let day = '31st August';
-    let session = 'FN';
-    if (targetBatch.startsWith('Day 1')) {
-      day = '31st August';
-      session = targetBatch.includes('AN') ? 'AN' : 'FN';
-    } else if (targetBatch.startsWith('Day 2')) {
-      day = '1st September';
-      session = targetBatch.includes('AN') ? 'AN' : 'FN';
-    } else if (targetBatch.startsWith('Day 3')) {
-      day = '2nd September';
-      session = targetBatch.includes('AN') ? 'AN' : 'FN';
-    }
-
+  const handleAssignPSToTrack = (psId: string, day: string, track: 'FN_PPT_AN_PROTO' | 'FN_PROTO_AN_PPT') => {
     setProblemStatements(prev => prev.map(ps => {
       if (ps.id === psId) {
         return {
           ...ps,
-          batch: targetBatch,
           presentation_day: day,
-          session: session
+          schedule_track: track,
+          session: track === 'FN_PROTO_AN_PPT' ? 'AN' : 'FN',
+          session_type: track === 'FN_PROTO_AN_PPT' ? 'Prototype' : 'PPT'
         };
       }
       return ps;
     }));
   };
 
-  const handleUnassignPSFromBatch = (psId: string) => {
+  const handleUnassignPSFromTrack = (psId: string) => {
     setProblemStatements(prev => prev.map(ps => {
       if (ps.id === psId) {
         return {
           ...ps,
-          batch: null,
           presentation_day: null,
+          schedule_track: null,
+          batch: null,
           session: 'FN'
         };
       }
@@ -737,15 +731,21 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const handleSaveScheduleAndBatches = async () => {
     setSavingSchedule(true);
     try {
-      // 1. Save schedule settings
+      // 1. Save schedule settings and rooms
       const { data: existing } = await supabase.from('evaluation_settings').select('id').limit(1);
       const schedulePayload = {
-        day1_fn_type: evalSettings?.day1_fn_type || 'PPT',
-        day1_an_type: evalSettings?.day1_an_type || 'Prototype',
-        day2_fn_type: evalSettings?.day2_fn_type || 'Prototype',
-        day2_an_type: evalSettings?.day2_an_type || 'PPT',
-        day3_fn_type: evalSettings?.day3_fn_type || 'PPT',
-        day3_an_type: evalSettings?.day3_an_type || 'Prototype',
+        day1_ppt_room: evalSettings?.day1_ppt_room || 'C-002',
+        day1_proto_room: evalSettings?.day1_proto_room || 'D-013',
+        day2_ppt_room: evalSettings?.day2_ppt_room || 'C-002',
+        day2_proto_room: evalSettings?.day2_proto_room || 'D-013',
+        day3_ppt_room: evalSettings?.day3_ppt_room || 'C-002',
+        day3_proto_room: evalSettings?.day3_proto_room || 'D-013',
+        day1_fn_type: 'PPT',
+        day1_an_type: 'Prototype',
+        day2_fn_type: 'Prototype',
+        day2_an_type: 'PPT',
+        day3_fn_type: 'PPT',
+        day3_an_type: 'Prototype',
         updated_at: new Date().toISOString()
       };
       if (existing && existing.length > 0) {
@@ -756,27 +756,17 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
       // 2. Batch update problem statements
       for (const ps of problemStatements) {
-        let defaultType = 'PPT';
-        const b = ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : null);
-        if (b) {
-          if (b.startsWith('Day 1')) {
-            defaultType = (ps.session === 'FN' || b.includes('FN')) ? (evalSettings?.day1_fn_type || 'PPT') : (evalSettings?.day1_an_type || 'Prototype');
-          } else if (b.startsWith('Day 2')) {
-            defaultType = (ps.session === 'FN' || b.includes('FN')) ? (evalSettings?.day2_fn_type || 'Prototype') : (evalSettings?.day2_an_type || 'PPT');
-          } else if (b.startsWith('Day 3')) {
-            defaultType = (ps.session === 'FN' || b.includes('FN')) ? (evalSettings?.day3_fn_type || 'PPT') : (evalSettings?.day3_an_type || 'Prototype');
-          }
-        }
-
+        const track = ps.schedule_track || 'FN_PPT_AN_PROTO';
         await supabase.from('problem_statements').update({
-          batch: ps.batch || null,
           presentation_day: ps.presentation_day || null,
-          session: ps.session || 'FN',
-          session_type: defaultType
+          schedule_track: track,
+          session: track === 'FN_PROTO_AN_PPT' ? 'AN' : 'FN',
+          session_type: track === 'FN_PROTO_AN_PPT' ? 'Prototype' : 'PPT',
+          room_number: track === 'FN_PROTO_AN_PPT' ? evalSettings?.day1_proto_room : evalSettings?.day1_ppt_room
         }).eq('id', ps.id);
       }
 
-      alert("Day & Session Schedule and Batch Allocations saved successfully!");
+      alert("Dual-Room Schedules & Problem Statement Tracks saved successfully!");
       fetchEvalData();
       fetchProblemStatements();
       fetchTeams();
@@ -1432,15 +1422,15 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 </div>
               </div>
 
-              {/* Day & Session Schedule Configuration */}
+              {/* Dual-Room Day Schedule & Problem Statement Track Allocation */}
               <div className="card max-w-5xl mx-auto mt-6">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
                   <div>
                     <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                      <Clock size={20} className="text-gray-300" /> Day & Session Schedule (6 Batches & Statement Allocations)
+                      <Clock size={20} className="text-gray-300" /> Dual-Room Day Schedule & Track Allocation
                     </h3>
                     <p className="text-xs text-gray-400 mt-1">
-                      Configure evaluation modes (PPT / Prototype) and allocate problem statements directly to the 6 Batches.
+                      Configure dedicated PPT & Prototype rooms for each day. In FN, Track A does PPT in PPT Room while Track B does Prototype in Prototype Room; in AN, they automatically swap!
                     </p>
                   </div>
                   <button 
@@ -1448,452 +1438,173 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     onClick={handleSaveScheduleAndBatches}
                     className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-6 py-2 rounded-lg shadow-sm text-sm transition-all font-medium flex items-center gap-2"
                   >
-                    {savingSchedule ? 'Saving Schedule & Allocations...' : 'Save Schedule & Allocations'}
+                    {savingSchedule ? 'Saving Schedules & Tracks...' : 'Save Dual-Room Schedule & Allocations'}
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-                  {/* Day 1 */}
-                  <div className="bg-black/30 p-4 rounded-xl border border-white/10 space-y-4">
-                    <div className="border-b border-white/10 pb-2 flex justify-between items-center">
-                      <h4 className="text-sm font-bold text-white">Day 1 (31st August)</h4>
-                      <span className="text-[11px] text-gray-400 font-mono">Batches 1 & 2</span>
-                    </div>
+                <div className="space-y-6">
+                  {[
+                    { dayName: 'Day 1 (31st August)', dayKey: '31st August', pptKey: 'day1_ppt_room', protoKey: 'day1_proto_room', defaultPpt: 'C-002', defaultProto: 'D-013' },
+                    { dayName: 'Day 2 (1st September)', dayKey: '1st September', pptKey: 'day2_ppt_room', protoKey: 'day2_proto_room', defaultPpt: 'C-002', defaultProto: 'D-013' },
+                    { dayName: 'Day 3 (2nd September)', dayKey: '2nd September', pptKey: 'day3_ppt_room', protoKey: 'day3_proto_room', defaultPpt: 'C-002', defaultProto: 'D-013' },
+                  ].map((d) => {
+                    const currentPptRoom = evalSettings?.[d.pptKey] || d.defaultPpt;
+                    const currentProtoRoom = evalSettings?.[d.protoKey] || d.defaultProto;
 
-                    {/* Batch 1 */}
-                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <h5 className="text-xs font-bold text-white">Batch 1 (FN Morning)</h5>
-                          <span className="text-[10px] text-gray-400 font-mono">09:30 AM</span>
+                    const trackAPS = problemStatements.filter(ps => ps.presentation_day === d.dayKey && (ps.schedule_track === 'FN_PPT_AN_PROTO' || !ps.schedule_track));
+                    const trackBPS = problemStatements.filter(ps => ps.presentation_day === d.dayKey && ps.schedule_track === 'FN_PROTO_AN_PPT');
+
+                    return (
+                      <div key={d.dayKey} className="bg-black/30 p-5 rounded-xl border border-white/10 space-y-4">
+                        {/* Day Header & Dual Room Inputs */}
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-3 border-b border-white/10">
+                          <div>
+                            <h4 className="text-base font-bold text-white">{d.dayName}</h4>
+                            <span className="text-xs text-gray-400">2 Dedicated Rooms • Automatic Afternoon Track Swap</span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-4">
+                            <div className="flex items-center gap-2">
+                              <label className="text-xs text-gray-300 font-medium">PPT Room (All Day):</label>
+                              <input
+                                type="text"
+                                value={currentPptRoom}
+                                onChange={(e) => setEvalSettings({ ...evalSettings, [d.pptKey]: e.target.value })}
+                                placeholder="e.g. C-002"
+                                className="w-24 text-xs font-mono font-bold py-1 px-2 border border-white/20 rounded-md bg-black/50 text-white focus:border-white/40"
+                              />
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <label className="text-xs text-gray-300 font-medium">Prototype Room (All Day):</label>
+                              <input
+                                type="text"
+                                value={currentProtoRoom}
+                                onChange={(e) => setEvalSettings({ ...evalSettings, [d.protoKey]: e.target.value })}
+                                placeholder="e.g. D-013"
+                                className="w-24 text-xs font-mono font-bold py-1 px-2 border border-white/20 rounded-md bg-black/50 text-white focus:border-white/40"
+                              />
+                            </div>
+                          </div>
                         </div>
-                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
-                          {evalSettings?.day1_fn_type || 'PPT'}
-                        </span>
-                      </div>
 
-                      <div>
-                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
-                        <select 
-                          value={evalSettings?.day1_fn_type || 'PPT'} 
-                          onChange={(e) => setEvalSettings({ ...evalSettings, day1_fn_type: e.target.value, day1_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
-                        >
-                          <option value="PPT">PPT Presentation</option>
-                          <option value="Prototype">Prototype Evaluation</option>
-                        </select>
-                      </div>
+                        {/* Dual Tracks Cards */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {/* Track A */}
+                          <div className="bg-black/40 p-4 rounded-lg border border-white/10 space-y-3">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <h5 className="text-sm font-bold text-white">Track A (FN: PPT ➔ AN: Prototype)</h5>
+                                <p className="text-[11px] text-gray-300 font-mono mt-0.5">
+                                  FN (09:30 AM): PPT in <strong>{currentPptRoom}</strong> | AN (01:30 PM): Proto in <strong>{currentProtoRoom}</strong>
+                                </p>
+                              </div>
+                              <span className="text-xs bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium shrink-0">
+                                {trackAPS.length} PS
+                              </span>
+                            </div>
 
-                      <div>
-                        <div className="flex justify-between items-center mb-1.5">
-                          <label className="text-[11px] text-gray-300 font-medium">
-                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - FN').length})
-                          </label>
-                        </div>
+                            {/* Assigned Statements Chips */}
+                            <div>
+                              <label className="block text-[11px] text-gray-300 font-medium mb-1.5">
+                                Assigned Problem Statements:
+                              </label>
+                              <div className="flex flex-wrap gap-1.5 mb-2 max-h-28 overflow-y-auto p-1.5 bg-black/20 rounded-lg border border-white/5">
+                                {trackAPS.map(ps => (
+                                  <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/15 text-white px-2.5 py-1 rounded-md border border-white/15">
+                                    <span className="font-bold">{ps.id}</span>
+                                    <span className="text-[10px] text-gray-300">({ps.current_teams} teams)</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUnassignPSFromTrack(ps.id)}
+                                      className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
+                                      title="Remove from track"
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  </span>
+                                ))}
+                                {trackAPS.length === 0 && (
+                                  <p className="text-[11px] text-gray-500 italic p-1">No statements assigned to Track A</p>
+                                )}
+                              </div>
 
-                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - FN').map(ps => (
-                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
-                              <span className="font-semibold">{ps.id}</span>
-                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
-                              <button
-                                type="button"
-                                onClick={() => handleUnassignPSFromBatch(ps.id)}
-                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
-                                title="Remove from batch"
+                              <select
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value) handleAssignPSToTrack(e.target.value, d.dayKey, 'FN_PPT_AN_PROTO');
+                                }}
+                                className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
                               >
-                                <X size={12} />
-                              </button>
-                            </span>
-                          ))}
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - FN').length === 0 && (
-                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
-                          )}
-                        </div>
+                                <option value="">+ Add Statement to Track A ({d.dayName})...</option>
+                                {problemStatements.filter(ps => ps.presentation_day !== d.dayKey || ps.schedule_track === 'FN_PROTO_AN_PPT').map(ps => (
+                                  <option key={ps.id} value={ps.id}>
+                                    {ps.id} - {ps.title.substring(0, 26)}... ({ps.current_teams} teams)
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
 
-                        <select
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 1 - FN');
-                          }}
-                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
-                        >
-                          <option value="">+ Add Statement to Batch 1...</option>
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 1 - FN').map(ps => (
-                            <option key={ps.id} value={ps.id}>
-                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
+                          {/* Track B */}
+                          <div className="bg-black/40 p-4 rounded-lg border border-white/10 space-y-3">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <h5 className="text-sm font-bold text-white">Track B (FN: Prototype ➔ AN: PPT)</h5>
+                                <p className="text-[11px] text-gray-300 font-mono mt-0.5">
+                                  FN (09:30 AM): Proto in <strong>{currentProtoRoom}</strong> | AN (01:30 PM): PPT in <strong>{currentPptRoom}</strong>
+                                </p>
+                              </div>
+                              <span className="text-xs bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium shrink-0">
+                                {trackBPS.length} PS
+                              </span>
+                            </div>
 
-                    {/* Batch 2 */}
-                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <h5 className="text-xs font-bold text-white">Batch 2 (AN Afternoon)</h5>
-                          <span className="text-[10px] text-gray-400 font-mono">01:30 PM</span>
-                        </div>
-                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
-                          {evalSettings?.day1_an_type || 'Prototype'}
-                        </span>
-                      </div>
+                            {/* Assigned Statements Chips */}
+                            <div>
+                              <label className="block text-[11px] text-gray-300 font-medium mb-1.5">
+                                Assigned Problem Statements:
+                              </label>
+                              <div className="flex flex-wrap gap-1.5 mb-2 max-h-28 overflow-y-auto p-1.5 bg-black/20 rounded-lg border border-white/5">
+                                {trackBPS.map(ps => (
+                                  <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/15 text-white px-2.5 py-1 rounded-md border border-white/15">
+                                    <span className="font-bold">{ps.id}</span>
+                                    <span className="text-[10px] text-gray-300">({ps.current_teams} teams)</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUnassignPSFromTrack(ps.id)}
+                                      className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
+                                      title="Remove from track"
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  </span>
+                                ))}
+                                {trackBPS.length === 0 && (
+                                  <p className="text-[11px] text-gray-500 italic p-1">No statements assigned to Track B</p>
+                                )}
+                              </div>
 
-                      <div>
-                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
-                        <select 
-                          value={evalSettings?.day1_an_type || 'Prototype'} 
-                          onChange={(e) => setEvalSettings({ ...evalSettings, day1_an_type: e.target.value, day1_fn_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
-                        >
-                          <option value="Prototype">Prototype Evaluation</option>
-                          <option value="PPT">PPT Presentation</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <div className="flex justify-between items-center mb-1.5">
-                          <label className="text-[11px] text-gray-300 font-medium">
-                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - AN').length})
-                          </label>
-                        </div>
-
-                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - AN').map(ps => (
-                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
-                              <span className="font-semibold">{ps.id}</span>
-                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
-                              <button
-                                type="button"
-                                onClick={() => handleUnassignPSFromBatch(ps.id)}
-                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
-                                title="Remove from batch"
+                              <select
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value) handleAssignPSToTrack(e.target.value, d.dayKey, 'FN_PROTO_AN_PPT');
+                                }}
+                                className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
                               >
-                                <X size={12} />
-                              </button>
-                            </span>
-                          ))}
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - AN').length === 0 && (
-                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
-                          )}
+                                <option value="">+ Add Statement to Track B ({d.dayName})...</option>
+                                {problemStatements.filter(ps => ps.presentation_day !== d.dayKey || ps.schedule_track !== 'FN_PROTO_AN_PPT').map(ps => (
+                                  <option key={ps.id} value={ps.id}>
+                                    {ps.id} - {ps.title.substring(0, 26)}... ({ps.current_teams} teams)
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
                         </div>
-
-                        <select
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 1 - AN');
-                          }}
-                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
-                        >
-                          <option value="">+ Add Statement to Batch 2...</option>
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 1 - AN').map(ps => (
-                            <option key={ps.id} value={ps.id}>
-                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
-                            </option>
-                          ))}
-                        </select>
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Day 2 */}
-                  <div className="bg-black/30 p-4 rounded-xl border border-white/10 space-y-4">
-                    <div className="border-b border-white/10 pb-2 flex justify-between items-center">
-                      <h4 className="text-sm font-bold text-white">Day 2 (1st September)</h4>
-                      <span className="text-[11px] text-gray-400 font-mono">Batches 3 & 4</span>
-                    </div>
-
-                    {/* Batch 3 */}
-                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <h5 className="text-xs font-bold text-white">Batch 3 (FN Morning)</h5>
-                          <span className="text-[10px] text-gray-400 font-mono">09:30 AM</span>
-                        </div>
-                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
-                          {evalSettings?.day2_fn_type || 'Prototype'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
-                        <select 
-                          value={evalSettings?.day2_fn_type || 'Prototype'} 
-                          onChange={(e) => setEvalSettings({ ...evalSettings, day2_fn_type: e.target.value, day2_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
-                        >
-                          <option value="Prototype">Prototype Evaluation</option>
-                          <option value="PPT">PPT Presentation</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <div className="flex justify-between items-center mb-1.5">
-                          <label className="text-[11px] text-gray-300 font-medium">
-                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - FN').length})
-                          </label>
-                        </div>
-
-                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - FN').map(ps => (
-                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
-                              <span className="font-semibold">{ps.id}</span>
-                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
-                              <button
-                                type="button"
-                                onClick={() => handleUnassignPSFromBatch(ps.id)}
-                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
-                                title="Remove from batch"
-                              >
-                                <X size={12} />
-                              </button>
-                            </span>
-                          ))}
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - FN').length === 0 && (
-                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
-                          )}
-                        </div>
-
-                        <select
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 2 - FN');
-                          }}
-                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
-                        >
-                          <option value="">+ Add Statement to Batch 3...</option>
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 2 - FN').map(ps => (
-                            <option key={ps.id} value={ps.id}>
-                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* Batch 4 */}
-                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <h5 className="text-xs font-bold text-white">Batch 4 (AN Afternoon)</h5>
-                          <span className="text-[10px] text-gray-400 font-mono">01:30 PM</span>
-                        </div>
-                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
-                          {evalSettings?.day2_an_type || 'PPT'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
-                        <select 
-                          value={evalSettings?.day2_an_type || 'PPT'} 
-                          onChange={(e) => setEvalSettings({ ...evalSettings, day2_an_type: e.target.value, day2_fn_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
-                        >
-                          <option value="PPT">PPT Presentation</option>
-                          <option value="Prototype">Prototype Evaluation</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <div className="flex justify-between items-center mb-1.5">
-                          <label className="text-[11px] text-gray-300 font-medium">
-                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - AN').length})
-                          </label>
-                        </div>
-
-                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - AN').map(ps => (
-                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
-                              <span className="font-semibold">{ps.id}</span>
-                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
-                              <button
-                                type="button"
-                                onClick={() => handleUnassignPSFromBatch(ps.id)}
-                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
-                                title="Remove from batch"
-                              >
-                                <X size={12} />
-                              </button>
-                            </span>
-                          ))}
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - AN').length === 0 && (
-                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
-                          )}
-                        </div>
-
-                        <select
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 2 - AN');
-                          }}
-                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
-                        >
-                          <option value="">+ Add Statement to Batch 4...</option>
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 2 - AN').map(ps => (
-                            <option key={ps.id} value={ps.id}>
-                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Day 3 */}
-                  <div className="bg-black/30 p-4 rounded-xl border border-white/10 space-y-4">
-                    <div className="border-b border-white/10 pb-2 flex justify-between items-center">
-                      <h4 className="text-sm font-bold text-white">Day 3 (2nd September)</h4>
-                      <span className="text-[11px] text-gray-400 font-mono">Batches 5 & 6</span>
-                    </div>
-
-                    {/* Batch 5 */}
-                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <h5 className="text-xs font-bold text-white">Batch 5 (FN Morning)</h5>
-                          <span className="text-[10px] text-gray-400 font-mono">09:30 AM</span>
-                        </div>
-                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
-                          {evalSettings?.day3_fn_type || 'PPT'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
-                        <select 
-                          value={evalSettings?.day3_fn_type || 'PPT'} 
-                          onChange={(e) => setEvalSettings({ ...evalSettings, day3_fn_type: e.target.value, day3_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
-                        >
-                          <option value="PPT">PPT Presentation</option>
-                          <option value="Prototype">Prototype Evaluation</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <div className="flex justify-between items-center mb-1.5">
-                          <label className="text-[11px] text-gray-300 font-medium">
-                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - FN').length})
-                          </label>
-                        </div>
-
-                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - FN').map(ps => (
-                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
-                              <span className="font-semibold">{ps.id}</span>
-                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
-                              <button
-                                type="button"
-                                onClick={() => handleUnassignPSFromBatch(ps.id)}
-                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
-                                title="Remove from batch"
-                              >
-                                <X size={12} />
-                              </button>
-                            </span>
-                          ))}
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - FN').length === 0 && (
-                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
-                          )}
-                        </div>
-
-                        <select
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 3 - FN');
-                          }}
-                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
-                        >
-                          <option value="">+ Add Statement to Batch 5...</option>
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 3 - FN').map(ps => (
-                            <option key={ps.id} value={ps.id}>
-                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* Batch 6 */}
-                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <h5 className="text-xs font-bold text-white">Batch 6 (AN Afternoon)</h5>
-                          <span className="text-[10px] text-gray-400 font-mono">01:30 PM</span>
-                        </div>
-                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
-                          {evalSettings?.day3_an_type || 'Prototype'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
-                        <select 
-                          value={evalSettings?.day3_an_type || 'Prototype'} 
-                          onChange={(e) => setEvalSettings({ ...evalSettings, day3_an_type: e.target.value, day3_fn_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
-                        >
-                          <option value="Prototype">Prototype Evaluation</option>
-                          <option value="PPT">PPT Presentation</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <div className="flex justify-between items-center mb-1.5">
-                          <label className="text-[11px] text-gray-300 font-medium">
-                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - AN').length})
-                          </label>
-                        </div>
-
-                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - AN').map(ps => (
-                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
-                              <span className="font-semibold">{ps.id}</span>
-                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
-                              <button
-                                type="button"
-                                onClick={() => handleUnassignPSFromBatch(ps.id)}
-                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
-                                title="Remove from batch"
-                              >
-                                <X size={12} />
-                              </button>
-                            </span>
-                          ))}
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - AN').length === 0 && (
-                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
-                          )}
-                        </div>
-
-                        <select
-                          value=""
-                          onChange={(e) => {
-                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 3 - AN');
-                          }}
-                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
-                        >
-                          <option value="">+ Add Statement to Batch 6...</option>
-                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 3 - AN').map(ps => (
-                            <option key={ps.id} value={ps.id}>
-                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex justify-end">
-                  <button 
-                    disabled={savingSchedule}
-                    onClick={handleSaveScheduleAndBatches}
-                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-6 py-2 rounded-lg shadow-sm text-sm transition-all font-medium"
-                  >
-                    {savingSchedule ? 'Saving Schedule & Allocations...' : 'Save Schedule & Allocations'}
-                  </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -2137,36 +1848,18 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                             </td>
                             <td className="p-4 text-sm">
                               <div className="space-y-1.5">
-                                <p className="font-bold text-white text-sm">{ps?.id || 'N/A'}</p>
-                                <div className="flex flex-wrap items-center gap-2 text-xs text-gray-200">
-                                  <span className="font-medium text-gray-200">{slot.day}</span>
-                                  <span className="text-gray-400">•</span>
-                                  <span className="font-bold text-white bg-white/20 border border-white/30 px-2 py-0.5 rounded text-xs font-mono">
-                                    {slot.session} ({slot.sessionType})
-                                  </span>
-                                  <span className="text-gray-400">•</span>
-                                  <span className="text-gray-300">Room: <strong className="text-white font-bold">{slot.roomNumber}</strong></span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-white text-base">{ps?.id || 'N/A'}</span>
+                                  <span className="text-xs text-gray-300 font-mono">({slot.day})</span>
                                 </div>
-                                {(() => {
-                                  const norm = getDayNormalized(slot.day);
-                                  let fnType = evalSettings?.day1_fn_type || 'PPT';
-                                  let anType = evalSettings?.day1_an_type || 'Prototype';
-                                  if (norm === '1st September') {
-                                    fnType = evalSettings?.day2_fn_type || 'Prototype';
-                                    anType = evalSettings?.day2_an_type || 'PPT';
-                                  } else if (norm === '2nd September') {
-                                    fnType = evalSettings?.day3_fn_type || 'PPT';
-                                    anType = evalSettings?.day3_an_type || 'Prototype';
-                                  }
-                                  return (
-                                    <div className="inline-flex items-center gap-2 text-xs text-gray-200 bg-white/10 border border-white/20 px-2.5 py-1 rounded-md font-mono">
-                                      <span className="text-gray-300 font-medium">Day Schedule:</span>
-                                      <span className="font-bold text-white">FN: {fnType}</span>
-                                      <span className="text-gray-400 font-bold">|</span>
-                                      <span className="font-bold text-white">AN: {anType}</span>
-                                    </div>
-                                  );
-                                })()}
+                                <div className="flex flex-wrap gap-2 text-xs font-mono">
+                                  <span className="bg-white/15 text-white border border-white/20 px-2.5 py-0.5 rounded-md shadow-sm">
+                                    FN (09:30 AM): <strong className="text-white">{slot.fnMode}</strong> in Room <strong className="text-white">{slot.fnRoom}</strong>
+                                  </span>
+                                  <span className="bg-white/10 text-gray-200 border border-white/15 px-2.5 py-0.5 rounded-md shadow-sm">
+                                    AN (01:30 PM): <strong className="text-white">{slot.anMode}</strong> in Room <strong className="text-white">{slot.anRoom}</strong>
+                                  </span>
+                                </div>
                               </div>
                             </td>
                             <td className="p-4 text-sm text-center">
@@ -2547,7 +2240,6 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                           <th className="p-4">Dept & Year</th>
                           <th className="p-4 text-center">Breakdown (25 each)</th>
                           <th className="p-4 text-center">Total Score</th>
-                          <th className="p-4 text-right">Action</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2574,9 +2266,12 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                 <p className="text-xs text-gray-300 mt-0.5">Leader: <span className="font-medium text-white">{item.team.tl_name}</span> ({item.team.tl_email})</p>
                               </td>
                               <td className="p-4 text-sm">
-                                <span className="font-bold text-white text-sm">{item.ps?.id || 'N/A'}</span>
-                                <div className="text-xs text-gray-400 mt-0.5 font-mono">
-                                  {item.slot.badgeLabel} • Room {item.slot.roomNumber}
+                                <span className="font-bold text-white text-base">{item.ps?.id || 'N/A'}</span>
+                                <div className="text-xs text-gray-300 font-mono mt-0.5">
+                                  {item.slot.day} • {item.slot.trackName}
+                                </div>
+                                <div className="text-[11px] text-gray-400 font-mono mt-0.5">
+                                  PPT: Room {item.slot.pptRoom} | Proto: Room {item.slot.protoRoom}
                                 </div>
                               </td>
                               <td className="p-4 text-sm font-mono">
@@ -2602,31 +2297,12 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                   <span className="text-gray-500 font-mono">-</span>
                                 )}
                               </td>
-                              <td className="p-4 text-sm text-right">
-                                <button
-                                  onClick={() => {
-                                    setTeamToEvaluate(item.team);
-                                    if (item.evalData) {
-                                      setEvalScores({
-                                        cat1: item.evalData.cat1_score, cat2: item.evalData.cat2_score,
-                                        cat3: item.evalData.cat3_score, cat4: item.evalData.cat4_score
-                                      });
-                                    } else {
-                                      const initScores: Record<string, number> = {}; (evalSettings?.categories || []).forEach((c: any) => initScores[c.id] = 0); setEvalScores(initScores);
-                                    }
-                                    setEvalModalOpen(true);
-                                  }}
-                                  className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-4 py-1.5 rounded-lg text-xs font-medium transition-all"
-                                >
-                                  {item.evalData ? 'Edit Marks' : 'Evaluate'}
-                                </button>
-                              </td>
                             </tr>
                           );
                         })}
                         {ranked.length === 0 && (
                           <tr>
-                            <td colSpan={7} className="p-8 text-center text-gray-400">
+                            <td colSpan={6} className="p-8 text-center text-gray-400">
                               No teams matched the selected leaderboard filters.
                             </td>
                           </tr>
