@@ -340,6 +340,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     if (data) setProblemStatements(data);
   };
 
+  const getPSTeamCount = (psId: string) => {
+    return teams.filter(t => t.allocated_ps_id === psId && !t.is_disabled).length;
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1635,7 +1639,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                 {trackAPS.map(ps => (
                                   <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/15 text-white px-2 py-0.5 rounded-md border border-white/15">
                                     <span className="font-bold">{ps.id}</span>
-                                    <span className="text-[10px] text-gray-300">({ps.current_teams}t)</span>
+                                    <span className="text-[10px] text-gray-300">({getPSTeamCount(ps.id)}t)</span>
                                     <button
                                       type="button"
                                       onClick={() => handleUnassignPSFromTrack(ps.id)}
@@ -1661,7 +1665,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                 <option value="">+ Add PS to Track A...</option>
                                 {problemStatements.filter(ps => ps.presentation_day !== d.dayKey || ps.session !== 'FN').map(ps => (
                                   <option key={ps.id} value={ps.id}>
-                                    {ps.id} - {ps.title.substring(0, 24)}... ({ps.current_teams} teams)
+                                    {ps.id} - {ps.title.substring(0, 24)}... ({getPSTeamCount(ps.id)} teams)
                                   </option>
                                 ))}
                               </select>
@@ -1691,7 +1695,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                 {trackBPS.map(ps => (
                                   <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/15 text-white px-2 py-0.5 rounded-md border border-white/15">
                                     <span className="font-bold">{ps.id}</span>
-                                    <span className="text-[10px] text-gray-300">({ps.current_teams}t)</span>
+                                    <span className="text-[10px] text-gray-300">({getPSTeamCount(ps.id)}t)</span>
                                     <button
                                       type="button"
                                       onClick={() => handleUnassignPSFromTrack(ps.id)}
@@ -1717,7 +1721,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                 <option value="">+ Add PS to Track B...</option>
                                 {problemStatements.filter(ps => ps.presentation_day !== d.dayKey || ps.session !== 'AN').map(ps => (
                                   <option key={ps.id} value={ps.id}>
-                                    {ps.id} - {ps.title.substring(0, 24)}... ({ps.current_teams} teams)
+                                    {ps.id} - {ps.title.substring(0, 24)}... ({getPSTeamCount(ps.id)} teams)
                                   </option>
                                 ))}
                               </select>
@@ -1749,7 +1753,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                 {splitPS.map(ps => (
                                   <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/15 text-white px-2 py-0.5 rounded-md border border-white/15">
                                     <span className="font-bold">{ps.id}</span>
-                                    <span className="text-[10px] text-gray-300">({ps.current_teams}t - 50/50)</span>
+                                    <span className="text-[10px] text-gray-300">({getPSTeamCount(ps.id)}t - 50/50)</span>
                                     <button
                                       type="button"
                                       onClick={() => handleUnassignPSFromTrack(ps.id)}
@@ -1775,7 +1779,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                 <option value="">+ Add PS to 50/50 Split...</option>
                                 {problemStatements.filter(ps => ps.presentation_day !== d.dayKey || ps.session !== 'SPLIT').map(ps => (
                                   <option key={ps.id} value={ps.id}>
-                                    {ps.id} - {ps.title.substring(0, 24)}... ({ps.current_teams} teams)
+                                    {ps.id} - {ps.title.substring(0, 24)}... ({getPSTeamCount(ps.id)} teams)
                                   </option>
                                 ))}
                               </select>
@@ -1892,7 +1896,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                             <div>
                               <p className="font-bold text-sm text-white">{ps.id}: <span className="font-normal text-gray-300">{ps.title.substring(0,25)}...</span></p>
                               <div className="flex flex-wrap items-center gap-2 text-xs mt-1">
-                                <span className="text-gray-400">Teams: {ps.current_teams} / {ps.max_teams}</span>
+                                <span className="text-gray-400">Teams: {getPSTeamCount(ps.id)} / {ps.max_teams}</span>
                                 <span className="text-gray-300">• {psBatch}</span>
                                 <span className="text-gray-300">• Room: {ps.room_number || 'Not Set'}</span>
                               </div>
