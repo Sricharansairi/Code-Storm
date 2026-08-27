@@ -2,7 +2,7 @@
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Download, Users, Settings, Database, Filter, X, Trash2, Plus, Edit2, LayoutDashboard } from 'lucide-react';
+import { Upload, Download, Users, Settings, Database, Filter, X, Trash2, Plus, Edit2, LayoutDashboard, Clock } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -67,7 +67,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const getTeamSlotInfo = (team: any) => {
     const ps = problemStatements.find(p => p.id === team.allocated_ps_id);
     const day = team.presentation_day || ps?.presentation_day || '31st August';
-    const session = team.session || 'FN';
+    const session = team.session || ps?.session || 'FN';
     const batch = team.batch || getBatchFromDaySession(day, session);
     
     let defaultType = 'PPT';
@@ -78,13 +78,20 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     } else if (batch.startsWith('Day 3')) {
       defaultType = session === 'FN' ? (evalSettings?.day3_fn_type || 'PPT') : (evalSettings?.day3_an_type || 'Prototype');
     }
-    const sessionType = team.session_type || defaultType;
+    const sessionType = team.session_type || ps?.session_type || defaultType;
+
+    let dayNum = 'Day 1';
+    const normDay = getDayNormalized(day);
+    if (normDay === '1st September') dayNum = 'Day 2';
+    else if (normDay === '2nd September') dayNum = 'Day 3';
+    const badgeLabel = `${dayNum}/${session}`;
 
     return {
       day,
       session,
       sessionType,
       batch,
+      badgeLabel,
       roomNumber: ps?.room_number || '-'
     };
   };
@@ -167,7 +174,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
   // Settings States
   const [problemStatements, setProblemStatements] = useState<any[]>([]);
-  const [newPS, setNewPS] = useState({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, presentation_day: '', room_number: '' });
+  const [newPS, setNewPS] = useState({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, presentation_day: '', session: 'FN', session_type: 'PPT', room_number: '' });
   const [editingPSId, setEditingPSId] = useState<string | null>(null);
   const [deleteCode, setDeleteCode] = useState('');
   const [settingsMessage, setSettingsMessage] = useState({ text: '', type: '' });
@@ -175,7 +182,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   // Custom Modal States
   const [modalOpen, setModalOpen] = useState(false);
   const [modalType, setModalType] = useState<'edit' | 'delete' | 'add' | 'edit-team' | 'delete-team' | null>(null);
-  const [modalPS, setModalPS] = useState<any>({ presentation_day: '31st August', room_number: '' });
+  const [modalPS, setModalPS] = useState<any>({ presentation_day: '31st August', session: 'FN', session_type: 'PPT', room_number: '' });
   const [modalCode, setModalCode] = useState('');
   const [modalError, setModalError] = useState('');
   const [newTeam, setNewTeam] = useState({ team_name: '', tl_email: '' });
@@ -575,6 +582,8 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       categories: categoriesArray,
       max_teams: newPS.max_teams,
       presentation_day: newPS.presentation_day || null,
+      session: newPS.session || 'FN',
+      session_type: newPS.session_type || 'PPT',
       room_number: newPS.room_number || null
     }]);
 
@@ -582,7 +591,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       setSettingsMessage({ text: error.message, type: 'error' });
     } else {
       setSettingsMessage({ text: editingPSId ? 'Problem statement updated successfully!' : 'Problem statement added successfully!', type: 'success' });
-      setNewPS({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, presentation_day: '', room_number: '' });
+      setNewPS({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, presentation_day: '', session: 'FN', session_type: 'PPT', room_number: '' });
       setEditingPSId(null);
       fetchProblemStatements();
     }
@@ -629,6 +638,8 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         categories: (modalPS.categories || []).join(', '),
         max_teams: modalPS.max_teams,
         presentation_day: modalPS.presentation_day || '',
+        session: modalPS.session || 'FN',
+        session_type: modalPS.session_type || 'PPT',
         room_number: modalPS.room_number || ''
       });
       setEditingPSId(modalPS.id);
@@ -1066,7 +1077,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                   <div>
                     <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
-                      <Download size={20} className="text-blue-400" /> Export Reports by Problem Statement
+                      <Download size={20} className="text-gray-300" /> Export Reports by Problem Statement
                     </h3>
                     <p className="text-xs text-gray-400">
                       Choose a specific Problem Statement or All Statements to export team evaluations into Excel.
@@ -1087,7 +1098,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     </select>
                     <button 
                       onClick={() => handleExportEvaluationsByPS(selectedExportPS)}
-                      className="btn-primary text-sm flex items-center justify-center gap-2 shrink-0 py-2 px-5"
+                      className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 text-sm flex items-center justify-center gap-2 shrink-0 py-2 px-5 rounded-lg transition-all font-medium"
                     >
                       <Download size={16} /> Export to Excel
                     </button>
@@ -1100,7 +1111,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                   <div>
                     <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
-                      <Download size={20} className="text-emerald-400" /> Export Reports Batch-wise (6 Batches)
+                      <Download size={20} className="text-gray-300" /> Export Reports Batch-wise (6 Batches)
                     </h3>
                     <p className="text-xs text-gray-400">
                       Select a specific batch or All Batches to export team evaluation results grouped by batch to Excel.
@@ -1120,7 +1131,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     </select>
                     <button 
                       onClick={() => handleExportEvaluationsByBatch(selectedExportBatch)}
-                      className="btn-primary text-sm flex items-center justify-center gap-2 shrink-0 py-2 px-5"
+                      className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 text-sm flex items-center justify-center gap-2 shrink-0 py-2 px-5 rounded-lg transition-all font-medium"
                     >
                       <Download size={16} /> Export to Excel
                     </button>
@@ -1133,7 +1144,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 <div className="flex justify-between items-center mb-4">
                   <div>
                     <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                      <Clock size={20} className="text-blue-400" /> Day & Session Schedule (PPT / Prototype)
+                      <Clock size={20} className="text-gray-300" /> Day & Session Schedule (PPT / Prototype)
                     </h3>
                     <p className="text-xs text-gray-400 mt-1">
                       Configure Morning (FN) and Afternoon (AN) session modes for each of the 3 presentation days (6 Batches).
@@ -1255,7 +1266,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                         alert("Error saving schedule: " + err.message);
                       }
                     }}
-                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-5 py-2 rounded shadow-sm text-sm"
+                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-5 py-2 rounded-lg shadow-sm text-sm transition-all font-medium"
                   >
                     Save Schedule
                   </button>
@@ -1264,7 +1275,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
               <div className="card max-w-4xl mx-auto mt-6">
                 <div className="flex items-center gap-3 mb-6">
-                  <div className="p-2 bg-primary/10 text-blue-300 rounded-lg"><Settings size={20} /></div>
+                  <div className="p-2 bg-white/10 text-white rounded-lg"><Settings size={20} /></div>
                   <h2 className="text-xl font-bold">Problem Statement Management</h2>
                 </div>
               
@@ -1274,58 +1285,80 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                   <div className="flex justify-between items-center mb-4">
                     <h3 className="font-bold text-white flex items-center gap-2"><Plus size={18}/> {editingPSId ? `Edit Statement: ${editingPSId}` : 'Add New Statement'}</h3>
                     {editingPSId && (
-                      <button onClick={() => { setEditingPSId(null); setNewPS({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, presentation_day: '', room_number: '' }); }} className="text-xs text-red-500 hover:text-red-700 underline">Cancel Edit</button>
+                      <button onClick={() => { setEditingPSId(null); setNewPS({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, presentation_day: '', session: 'FN', session_type: 'PPT', room_number: '' }); }} className="text-xs text-red-400 hover:text-red-300 underline">Cancel Edit</button>
                     )}
                   </div>
                   <form onSubmit={handleAddPS} className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label className="block text-xs font-medium text-gray-300 mb-1">ID (e.g. PS7)</label>
-                        <input type="text" required disabled={!!editingPSId} value={newPS.id} onChange={e=>setNewPS({...newPS, id: e.target.value})} className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg w-full text-sm disabled:opacity-50" />
+                        <input type="text" required disabled={!!editingPSId} value={newPS.id} onChange={e=>setNewPS({...newPS, id: e.target.value})} className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/40 text-white disabled:opacity-50" />
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-gray-300 mb-1">Max Teams</label>
-                        <input type="number" required min="1" value={newPS.max_teams} onChange={e=>setNewPS({...newPS, max_teams: parseInt(e.target.value)})} className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg w-full text-sm" />
+                        <input type="number" required min="1" value={newPS.max_teams} onChange={e=>setNewPS({...newPS, max_teams: parseInt(e.target.value)})} className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/40 text-white" />
                       </div>
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-300 mb-1">Title</label>
-                      <input type="text" required value={newPS.title} onChange={e=>setNewPS({...newPS, title: e.target.value})} className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg w-full text-sm" />
+                      <input type="text" required value={newPS.title} onChange={e=>setNewPS({...newPS, title: e.target.value})} className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/40 text-white" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-300 mb-1">Description</label>
-                      <textarea required value={newPS.description} onChange={e=>setNewPS({...newPS, description: e.target.value})} className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg w-full text-sm h-24" />
+                      <textarea required value={newPS.description} onChange={e=>setNewPS({...newPS, description: e.target.value})} className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/40 text-white h-24" />
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-gray-300 mb-1">Categories (comma separated)</label>
-                      <input type="text" value={newPS.categories} onChange={e=>setNewPS({...newPS, categories: e.target.value})} placeholder="e.g. AI/ML, Healthcare" className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg w-full text-sm" />
+                      <input type="text" value={newPS.categories} onChange={e=>setNewPS({...newPS, categories: e.target.value})} placeholder="e.g. AI/ML, Healthcare" className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/40 text-white" />
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-3 gap-3">
                       <div>
                         <label className="block text-xs font-medium text-gray-300 mb-1">Presentation Day</label>
                         <select 
                           value={newPS.presentation_day} 
                           onChange={e => setNewPS({...newPS, presentation_day: e.target.value})} 
-                          className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/30 text-white"
+                          className="w-full text-xs py-2 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
                         >
-                          <option value="">Select Day (Optional)</option>
+                          <option value="">Select Day</option>
                           <option value="31st August">31st August</option>
                           <option value="1st September">1st September</option>
                           <option value="2nd September">2nd September</option>
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-gray-300 mb-1">Room Number</label>
-                        <input 
-                          type="text" 
-                          placeholder="e.g. Room 201, Lab 3" 
-                          value={newPS.room_number} 
-                          onChange={e => setNewPS({...newPS, room_number: e.target.value})} 
-                          className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/30 text-white placeholder-gray-500" 
-                        />
+                        <label className="block text-xs font-medium text-gray-300 mb-1">Session</label>
+                        <select 
+                          value={newPS.session || 'FN'} 
+                          onChange={e => setNewPS({...newPS, session: e.target.value})} 
+                          className="w-full text-xs py-2 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                        >
+                          <option value="FN">FN (Morning)</option>
+                          <option value="AN">AN (Afternoon)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-300 mb-1">Type</label>
+                        <select 
+                          value={newPS.session_type || 'PPT'} 
+                          onChange={e => setNewPS({...newPS, session_type: e.target.value})} 
+                          className="w-full text-xs py-2 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                        >
+                          <option value="PPT">PPT</option>
+                          <option value="Prototype">Prototype</option>
+                        </select>
                       </div>
                     </div>
-                    <button type="submit" className="w-full btn-primary py-2 text-sm">Save Statement</button>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-300 mb-1">Room Number</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. Room 201, Lab 3" 
+                        value={newPS.room_number} 
+                        onChange={e => setNewPS({...newPS, room_number: e.target.value})} 
+                        className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/40 text-white placeholder-gray-500" 
+                      />
+                    </div>
+                    <button type="submit" className="w-full bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 py-2 rounded-lg text-sm font-medium transition-all">Save Statement</button>
                   </form>
                 </div>
 
@@ -1334,20 +1367,20 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                   <div className="p-4 border-b border-white/10 bg-black/20">
                     <h3 className="font-bold text-white">Existing Statements</h3>
                   </div>
-                  <div className="overflow-y-auto p-0 flex-grow max-h-[400px]">
-                    <ul className="divide-y divide-gray-100">
+                  <div className="overflow-y-auto p-0 flex-grow max-h-[420px]">
+                    <ul className="divide-y divide-white/5">
                       {problemStatements.map(ps => (
                         <li key={ps.id} className="p-4 flex items-center justify-between hover:bg-white/5 border-b border-white/5 last:border-0">
                           <div>
                             <p className="font-bold text-sm text-white">{ps.id}: <span className="font-normal text-gray-300">{ps.title.substring(0,25)}...</span></p>
                             <div className="flex flex-wrap items-center gap-2 text-xs mt-1">
                               <span className="text-gray-400">Teams: {ps.current_teams} / {ps.max_teams}</span>
-                              <span className="text-blue-400">• Day: {ps.presentation_day || 'Not Set'}</span>
-                              <span className="text-emerald-400">• Room: {ps.room_number || 'Not Set'}</span>
+                              <span className="text-gray-300">• Day: {ps.presentation_day || 'Not Set'} ({ps.session || 'FN'})</span>
+                              <span className="text-gray-300">• Room: {ps.room_number || 'Not Set'}</span>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <button onClick={() => openEditModal(ps)} className="p-2 text-gray-400 hover:text-blue-300 transition-colors bg-black/40 border border-white/10 rounded hover:bg-white/10" title="Edit Statement">
+                            <button onClick={() => openEditModal(ps)} className="p-2 text-gray-400 hover:text-white transition-colors bg-black/40 border border-white/10 rounded hover:bg-white/10" title="Edit Statement">
                               <Edit2 size={14} />
                             </button>
                             <button onClick={() => openDeleteModal(ps)} className="p-2 text-gray-400 hover:text-red-400 transition-colors bg-black/40 border border-white/10 rounded hover:bg-white/10" title="Delete Statement">
@@ -1468,15 +1501,15 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                 }}>
                                   {team.team_name}
                                 </p>
-                                <span className="text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 py-0.5 rounded font-mono font-bold">
-                                  {slot.batch} ({slot.sessionType})
+                                <span className="text-[11px] bg-white/5 border border-white/10 text-gray-300 px-2 py-0.5 rounded font-medium">
+                                  {slot.badgeLabel}
                                 </span>
                               </div>
                               <p className="text-xs text-gray-400">{team.tl_email}</p>
                             </td>
                             <td className="p-4 text-sm">
-                              <p className="font-medium text-blue-400">{ps?.id || 'N/A'}</p>
-                              <p className="text-xs text-gray-300">{slot.day} ({slot.session}) • Room: {slot.roomNumber}</p>
+                              <p className="font-medium text-gray-200">{ps?.id || 'N/A'}</p>
+                              <p className="text-xs text-gray-400">{slot.day} ({slot.session}) • Room: {slot.roomNumber}</p>
                             </td>
                             <td className="p-4 text-sm text-center">
                               {evaluation ? (
@@ -1502,7 +1535,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                   }
                                   setEvalModalOpen(true);
                                 }}
-                                className={`px-4 py-1.5 rounded-full text-xs font-bold transition-colors ${evaluation ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-white/10 text-white hover:bg-white/20 border border-white/20'}`}
+                                className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-4 py-1.5 rounded-lg text-xs font-medium transition-all"
                               >
                                 {evaluation ? 'Edit Marks' : 'Evaluate'}
                               </button>
@@ -1724,7 +1757,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
               <div className="bg-white/5 rounded-xl p-4 border border-white/10 space-y-3">
                 <div className="flex justify-between items-center">
                   <h5 className="text-xs font-bold text-gray-300 uppercase tracking-wider">Presentation Slot & Batch</h5>
-                  <span className="text-xs font-mono font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded">
+                  <span className="text-xs font-mono font-bold bg-white/10 text-white border border-white/10 px-2 py-0.5 rounded">
                     {getBatchFromDaySession(slotDay, slotSession)} • {slotSessionType}
                   </span>
                 </div>
@@ -1805,7 +1838,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                         setSavingSlot(false);
                       }
                     }}
-                    className="bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30 text-xs font-semibold py-1.5 px-4 rounded-lg transition-all"
+                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 text-xs font-semibold py-1.5 px-4 rounded-lg transition-all"
                   >
                     {savingSlot ? 'Saving Slot...' : 'Save Presentation Slot'}
                   </button>

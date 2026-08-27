@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS problem_statements (
 );
 
 ALTER TABLE problem_statements ADD COLUMN IF NOT EXISTS presentation_day text;
+ALTER TABLE problem_statements ADD COLUMN IF NOT EXISTS session text DEFAULT 'FN';
+ALTER TABLE problem_statements ADD COLUMN IF NOT EXISTS session_type text DEFAULT 'PPT';
 ALTER TABLE problem_statements ADD COLUMN IF NOT EXISTS room_number text;
 ALTER TABLE problem_statements ADD COLUMN IF NOT EXISTS current_teams integer DEFAULT 0;
 ALTER TABLE problem_statements ADD COLUMN IF NOT EXISTS max_teams integer DEFAULT 17;
