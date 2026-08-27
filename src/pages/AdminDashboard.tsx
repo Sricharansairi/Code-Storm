@@ -4,6 +4,7 @@ import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import { Upload, Download, Users, Settings, Database, Filter, X, Trash2, Plus, Edit2, LayoutDashboard, Clock, Trophy, Award, Search, Medal } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { exportStyledExcel } from '../utils/excelExporter';
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -402,21 +403,22 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     const exportData = filteredTeams.map((t, index) => ({
       'Sl No': index + 1,
       'Team Name': t.team_name,
-      'TL Name': t.tl_name,
+      'TL Name': t.tl_name || '-',
       'TL Email': t.tl_email,
-      'TL Mobile': t.tl_mobile,
-      'Department': t.tl_department,
-      'Year': t.tl_year,
+      'TL Mobile': t.tl_mobile || '-',
+      'Department': t.tl_department || '-',
+      'Year': t.tl_year || '-',
       'Member 1': t.members?.[0] || '',
       'Member 2': t.members?.[1] || '',
       'Member 3': t.members?.[2] || '',
       'Member 4': t.members?.[3] || '',
+      'Problem Statement ID': t.allocated_ps_id || '-',
       'Status': t.allocated_ps_id ? `Allocated (${t.allocated_ps_id})` : 'Pending'
     }));
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Allocations");
-    XLSX.writeFile(workbook, "CodeStorm_Allocations.xlsx");
+
+    exportStyledExcel([
+      { sheetName: 'Allocations', data: exportData }
+    ], 'CodeStorm_Allocations.xlsx');
   };
 
 
@@ -450,9 +452,9 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         'Batch': slot.batch,
         'Session': slot.session,
         'Session Type': slot.sessionType,
-        'TL Name': t.tl_name,
+        'TL Name': t.tl_name || '-',
         'TL Email': t.tl_email,
-        'TL Mobile': t.tl_mobile,
+        'TL Mobile': t.tl_mobile || '-',
         'Problem Statement ID': t.allocated_ps_id || '-',
         'Presentation Day': slot.day,
         'Room Number': slot.roomNumber,
@@ -465,10 +467,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         'Evaluated By': evalData ? evalData.evaluated_by : '-'
       };
     });
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Evaluations");
-    XLSX.writeFile(workbook, "CodeStorm_Evaluations.xlsx");
+
+    exportStyledExcel([
+      { sheetName: 'Evaluations', data: exportData }
+    ], 'CodeStorm_Evaluations.xlsx');
   };
 
   const [selectedExportPS, setSelectedExportPS] = useState('ALL');
@@ -550,42 +552,22 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       });
     });
 
-    const workbook = XLSX.utils.book_new();
-    const title = targetPS === 'ALL' ? 'ALL PROBLEM STATEMENTS' : targetPS;
-
-    const worksheet = XLSX.utils.aoa_to_sheet([
-      [`CODE STORM 2026 - ${title} - PPT PRESENTATIONS TABLE`],
-      [`Generated on: ${new Date().toLocaleString()}`],
-      []
-    ]);
-
-    XLSX.utils.sheet_add_json(worksheet, pptRows, { origin: 'A4' });
-
-    const protoStartRow = pptRows.length + 7;
-    XLSX.utils.sheet_add_aoa(worksheet, [
-      [],
-      [`CODE STORM 2026 - ${title} - PROTOTYPE EVALUATIONS TABLE`],
-      [`Generated on: ${new Date().toLocaleString()}`],
-      []
-    ], { origin: `A${protoStartRow}` });
-
-    XLSX.utils.sheet_add_json(worksheet, protoRows, { origin: `A${protoStartRow + 4}` });
-
-    const filename = targetPS === 'ALL' 
+    const filename = (targetPS === 'ALL' || targetPS === 'All') 
       ? 'CodeStorm_Evaluations_All_Problem_Statements.xlsx' 
       : `CodeStorm_Evaluations_${targetPS}.xlsx`;
-    const sheetName = targetPS === 'ALL' ? 'All_PS_Evaluations' : targetPS.replace(/[:\\/?*\[\]]/g, '_');
 
-    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-    XLSX.writeFile(workbook, filename);
+    exportStyledExcel([
+      { sheetName: 'PPT Presentations', data: pptRows },
+      { sheetName: 'Prototype Evaluations', data: protoRows }
+    ], filename);
   };
 
   const handleExportLeaderboard = () => {
-    const activeTeams = teams.filter(t => t.allocated_ps_id && !t.is_disabled);
+    const activeTeams = teams.filter(t => t.allocated_ps_id);
     
     const ranked = activeTeams
       .map(t => {
-        const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
+        const ps = problemStatements.find(p => isPSMatch(p.id, t.allocated_ps_id));
         const evalData = evaluations.find(e => e.team_id === t.id);
         const slot = getTeamSlotInfo(t);
         const totalScore = evalData ? Number(evalData.total_score) : null;
@@ -599,7 +581,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         };
       })
       .filter(item => {
-        if (leaderboardPS !== 'All' && item.ps?.id !== leaderboardPS) return false;
+        if (leaderboardPS !== 'All' && !isPSMatch(item.ps?.id || item.team.allocated_ps_id, leaderboardPS)) return false;
         if (leaderboardDept !== 'All' && item.team.tl_department !== leaderboardDept) return false;
         if (leaderboardYear !== 'All' && item.team.tl_year !== leaderboardYear) return false;
         if (leaderboardSearch) {
@@ -647,18 +629,17 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       'Evaluated By': item.evalData ? item.evalData.evaluated_by : '-'
     }));
 
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Leaderboard");
-    XLSX.writeFile(workbook, `CodeStorm_Leaderboard_${leaderboardPS}_${leaderboardDept}_${leaderboardYear}.xlsx`.replace(/ /g, '_'));
+    exportStyledExcel([
+      { sheetName: 'Leaderboard', data: exportData }
+    ], `CodeStorm_Leaderboard_${leaderboardPS}_${leaderboardDept}_${leaderboardYear}.xlsx`.replace(/ /g, '_'));
   };
 
   const [selectedExportBatch, setSelectedExportBatch] = useState('ALL');
 
   const handleExportEvaluationsByBatch = (targetBatch: string = selectedExportBatch) => {
-    const activeTeams = teams.filter(t => t.allocated_ps_id && !t.is_disabled);
+    const activeTeams = teams.filter(t => t.allocated_ps_id);
     
-    const filteredTeams = targetBatch === 'ALL' 
+    const filteredTeams = (targetBatch === 'ALL' || targetBatch === 'All') 
       ? activeTeams 
       : activeTeams.filter(t => getTeamSlotInfo(t).batch === targetBatch);
 
@@ -678,7 +659,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     const protoRows: any[] = [];
 
     filteredTeams.forEach((t, index) => {
-      const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
+      const ps = problemStatements.find(p => isPSMatch(p.id, t.allocated_ps_id));
       const evalData = evaluations.find(e => e.team_id === t.id);
       const slot = getTeamSlotInfo(t);
 
@@ -732,37 +713,15 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       });
     });
 
-    const workbook = XLSX.utils.book_new();
-    const title = targetBatch === 'ALL' ? 'ALL BATCHES' : targetBatch.toUpperCase();
+    const safeBatch = (targetBatch === 'ALL' || targetBatch === 'All') 
+      ? 'All_Batches' 
+      : targetBatch.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const filename = `CodeStorm_Evaluations_${safeBatch}.xlsx`;
 
-    // Build worksheet with two stacked tables
-    const worksheet = XLSX.utils.aoa_to_sheet([
-      [`CODE STORM 2026 - ${title} - PPT PRESENTATIONS TABLE`],
-      [`Generated on: ${new Date().toLocaleString()}`],
-      []
-    ]);
-
-    // Table 1: PPT Presentations starting at row 4 (A4)
-    XLSX.utils.sheet_add_json(worksheet, pptRows, { origin: 'A4' });
-
-    // Table 2: Prototype Evaluations starting after Table 1
-    const protoStartRow = pptRows.length + 7;
-    XLSX.utils.sheet_add_aoa(worksheet, [
-      [],
-      [`CODE STORM 2026 - ${title} - PROTOTYPE EVALUATIONS TABLE`],
-      [`Generated on: ${new Date().toLocaleString()}`],
-      []
-    ], { origin: `A${protoStartRow}` });
-
-    XLSX.utils.sheet_add_json(worksheet, protoRows, { origin: `A${protoStartRow + 4}` });
-
-    const filename = targetBatch === 'ALL' 
-      ? 'CodeStorm_Evaluations_All_Batches.xlsx' 
-      : `CodeStorm_Evaluations_${targetBatch.replace(/ /g, '_')}.xlsx`;
-    const sheetName = targetBatch === 'ALL' ? 'All_Batches' : targetBatch.replace(/[:\\/?*\[\]]/g, '_');
-
-    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
-    XLSX.writeFile(workbook, filename);
+    exportStyledExcel([
+      { sheetName: 'PPT Presentations', data: pptRows },
+      { sheetName: 'Prototype Evaluations', data: protoRows }
+    ], filename);
   };
 
   const [savingSchedule, setSavingSchedule] = useState(false);
