@@ -39,14 +39,70 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     fetchCoordinators();
   }, []);
 
+  const BATCH_OPTIONS = [
+    { id: 'ALL', label: 'All Batches (6 Batches)' },
+    { id: 'Day 1 - FN', label: 'Batch 1: Day 1 - FN (Morning)' },
+    { id: 'Day 1 - AN', label: 'Batch 2: Day 1 - AN (Afternoon)' },
+    { id: 'Day 2 - FN', label: 'Batch 3: Day 2 - FN (Morning)' },
+    { id: 'Day 2 - AN', label: 'Batch 4: Day 2 - AN (Afternoon)' },
+    { id: 'Day 3 - FN', label: 'Batch 5: Day 3 - FN (Morning)' },
+    { id: 'Day 3 - AN', label: 'Batch 6: Day 3 - AN (Afternoon)' },
+  ];
+
+  const getDayNormalized = (dayStr?: string) => {
+    if (!dayStr) return '31st August';
+    if (dayStr.includes('1st') || dayStr.includes('Day 2')) return '1st September';
+    if (dayStr.includes('2nd') || dayStr.includes('Day 3')) return '2nd September';
+    return '31st August';
+  };
+
+  const getBatchFromDaySession = (day?: string, session: string = 'FN') => {
+    const normDay = getDayNormalized(day);
+    let dayNum = 'Day 1';
+    if (normDay === '1st September') dayNum = 'Day 2';
+    else if (normDay === '2nd September') dayNum = 'Day 3';
+    return `${dayNum} - ${session || 'FN'}`;
+  };
+
+  const getTeamSlotInfo = (team: any) => {
+    const ps = problemStatements.find(p => p.id === team.allocated_ps_id);
+    const day = team.presentation_day || ps?.presentation_day || '31st August';
+    const session = team.session || 'FN';
+    const batch = team.batch || getBatchFromDaySession(day, session);
+    
+    let defaultType = 'PPT';
+    if (batch.startsWith('Day 1')) {
+      defaultType = session === 'FN' ? (evalSettings?.day1_fn_type || 'PPT') : (evalSettings?.day1_an_type || 'Prototype');
+    } else if (batch.startsWith('Day 2')) {
+      defaultType = session === 'FN' ? (evalSettings?.day2_fn_type || 'Prototype') : (evalSettings?.day2_an_type || 'PPT');
+    } else if (batch.startsWith('Day 3')) {
+      defaultType = session === 'FN' ? (evalSettings?.day3_fn_type || 'PPT') : (evalSettings?.day3_an_type || 'Prototype');
+    }
+    const sessionType = team.session_type || defaultType;
+
+    return {
+      day,
+      session,
+      sessionType,
+      batch,
+      roomNumber: ps?.room_number || '-'
+    };
+  };
+
   const [evalFilterPS, setEvalFilterPS] = useState('All');
   const [evalFilterDay, setEvalFilterDay] = useState('All');
-  // const [evalFilterRoom, setEvalFilterRoom] = useState('All');
+  const [evalFilterBatch, setEvalFilterBatch] = useState('All');
   const [evalFilterStatus, setEvalFilterStatus] = useState('All');
   const [evalModalOpen, setEvalModalOpen] = useState(false);
   const [teamToEvaluate, setTeamToEvaluate] = useState<any>(null);
   const [evalScores, setEvalScores] = useState<Record<string, number>>({});
   const [savingEval, setSavingEval] = useState(false);
+
+  // Team Slot Edit States (in Team Details Modal)
+  const [slotDay, setSlotDay] = useState('31st August');
+  const [slotSession, setSlotSession] = useState('FN');
+  const [slotSessionType, setSlotSessionType] = useState('PPT');
+  const [savingSlot, setSavingSlot] = useState(false);
 
   const fetchEvalData = async () => {
     try {
@@ -99,6 +155,15 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
   // Modal State
   const [selectedTeam, setSelectedTeam] = useState<any | null>(null);
+
+  useEffect(() => {
+    if (selectedTeam) {
+      const slot = getTeamSlotInfo(selectedTeam);
+      setSlotDay(slot.day);
+      setSlotSession(slot.session);
+      setSlotSessionType(slot.sessionType);
+    }
+  }, [selectedTeam]);
 
   // Settings States
   const [problemStatements, setProblemStatements] = useState<any[]>([]);
@@ -255,7 +320,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     if (t.is_disabled) return false;
     const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
     if (!ps) return false;
-    if (evalFilterDay !== 'All' && ps.presentation_day !== evalFilterDay) return false;
+    
+    const slot = getTeamSlotInfo(t);
+    if (evalFilterDay !== 'All' && getDayNormalized(slot.day) !== getDayNormalized(evalFilterDay)) return false;
+    if (evalFilterBatch !== 'All' && slot.batch !== evalFilterBatch) return false;
     if (evalFilterPS !== 'All' && ps.id !== evalFilterPS) return false;
     const isEvaluated = evaluations.some(e => e.team_id === t.id);
     if (evalFilterStatus === 'Evaluated' && !isEvaluated) return false;
@@ -267,15 +335,19 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     const exportData = filteredEvalTeams.map((t: any, index: number) => {
       const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
       const evalData = evaluations.find(e => e.team_id === t.id);
+      const slot = getTeamSlotInfo(t);
       return {
         'Sl No': index + 1,
         'Team Name': t.team_name,
+        'Batch': slot.batch,
+        'Session': slot.session,
+        'Session Type': slot.sessionType,
         'TL Name': t.tl_name,
         'TL Email': t.tl_email,
         'TL Mobile': t.tl_mobile,
         'Problem Statement ID': t.allocated_ps_id || '-',
-        'Presentation Day': ps?.presentation_day || '-',
-        'Room Number': ps?.room_number || '-',
+        'Presentation Day': slot.day,
+        'Room Number': slot.roomNumber,
         [getCategoryName(0)]: evalData ? evalData.cat1_score : '-',
         [getCategoryName(1)]: evalData ? evalData.cat2_score : '-',
         [getCategoryName(2)]: evalData ? evalData.cat3_score : '-',
@@ -314,6 +386,9 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
           'Presentation Day': ps.presentation_day || '-',
           'Room Number': ps.room_number || '-',
           'Team Name': 'No Active Teams Allocated',
+          'Batch': '-',
+          'Session': '-',
+          'Session Type': '-',
           'TL Name': '-',
           'TL Email': '-',
           'TL Mobile': '-',
@@ -331,12 +406,16 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       } else {
         allocatedTeams.forEach((t) => {
           const evalData = evaluations.find(e => e.team_id === t.id);
+          const slot = getTeamSlotInfo(t);
           exportData.push({
             'Problem Statement ID': ps.id,
             'Problem Statement Title': ps.title,
-            'Presentation Day': ps.presentation_day || '-',
-            'Room Number': ps.room_number || '-',
+            'Presentation Day': slot.day,
+            'Room Number': slot.roomNumber,
             'Team Name': t.team_name,
+            'Batch': slot.batch,
+            'Session': slot.session,
+            'Session Type': slot.sessionType,
             'TL Name': t.tl_name || '-',
             'TL Email': t.tl_email,
             'TL Mobile': t.tl_mobile || '-',
@@ -359,6 +438,70 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       ? 'CodeStorm_Evaluations_All_Problem_Statements.xlsx' 
       : `CodeStorm_Evaluations_${targetPS}.xlsx`;
     const sheetName = targetPS === 'ALL' ? 'All_PS_Evaluations' : targetPS.replace(/[:\\/?*\[\]]/g, '_');
+
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+    XLSX.writeFile(workbook, filename);
+  };
+
+  const [selectedExportBatch, setSelectedExportBatch] = useState('ALL');
+
+  const handleExportEvaluationsByBatch = (targetBatch: string = selectedExportBatch) => {
+    const exportData: any[] = [];
+    const activeTeams = teams.filter(t => t.allocated_ps_id && !t.is_disabled);
+    
+    const filteredTeams = targetBatch === 'ALL' 
+      ? activeTeams 
+      : activeTeams.filter(t => getTeamSlotInfo(t).batch === targetBatch);
+
+    if (filteredTeams.length === 0) {
+      alert("No active teams found for the selected batch.");
+      return;
+    }
+
+    filteredTeams.sort((a, b) => {
+      const slotA = getTeamSlotInfo(a);
+      const slotB = getTeamSlotInfo(b);
+      if (slotA.batch !== slotB.batch) return slotA.batch.localeCompare(slotB.batch);
+      return a.team_name.localeCompare(b.team_name);
+    });
+
+    filteredTeams.forEach((t, index) => {
+      const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
+      const evalData = evaluations.find(e => e.team_id === t.id);
+      const slot = getTeamSlotInfo(t);
+
+      exportData.push({
+        'Sl No': index + 1,
+        'Batch': slot.batch,
+        'Presentation Day': slot.day,
+        'Session': slot.session === 'FN' ? 'Morning (FN)' : 'Afternoon (AN)',
+        'Session Type': slot.sessionType,
+        'Room Number': slot.roomNumber,
+        'Team Name': t.team_name,
+        'TL Name': t.tl_name || '-',
+        'TL Email': t.tl_email,
+        'TL Mobile': t.tl_mobile || '-',
+        'Department': t.tl_department || '-',
+        'Year': t.tl_year || '-',
+        'Problem Statement ID': ps?.id || '-',
+        'Problem Statement Title': ps?.title || '-',
+        'Team Members': (t.members || []).join(', ') || '-',
+        [getCategoryName(0)]: evalData ? evalData.cat1_score : '-',
+        [getCategoryName(1)]: evalData ? evalData.cat2_score : '-',
+        [getCategoryName(2)]: evalData ? evalData.cat3_score : '-',
+        [getCategoryName(3)]: evalData ? evalData.cat4_score : '-',
+        'Total Score': evalData ? evalData.total_score : '-',
+        'Evaluation Status': evalData ? 'Evaluated' : 'Pending',
+        'Evaluated By': evalData ? evalData.evaluated_by : '-'
+      });
+    });
+
+    const filename = targetBatch === 'ALL' 
+      ? 'CodeStorm_Evaluations_All_Batches.xlsx' 
+      : `CodeStorm_Evaluations_${targetBatch.replace(/ /g, '_')}.xlsx`;
+    const sheetName = targetBatch === 'ALL' ? 'All_Batches' : targetBatch.replace(/[:\\/?*\[\]]/g, '_');
 
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
@@ -952,6 +1095,173 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 </div>
               </div>
 
+              {/* Export Reports Batch-wise */}
+              <div className="card max-w-4xl mx-auto mt-6">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
+                      <Download size={20} className="text-emerald-400" /> Export Reports Batch-wise (6 Batches)
+                    </h3>
+                    <p className="text-xs text-gray-400">
+                      Select a specific batch or All Batches to export team evaluation results grouped by batch to Excel.
+                    </p>
+                  </div>
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
+                    <select
+                      value={selectedExportBatch}
+                      onChange={(e) => setSelectedExportBatch(e.target.value)}
+                      className="text-sm border-white/20 rounded-lg bg-black/40 backdrop-blur-xl border py-2 px-3 focus:ring-white/30 focus:border-white/30 text-white min-w-[220px]"
+                    >
+                      {BATCH_OPTIONS.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button 
+                      onClick={() => handleExportEvaluationsByBatch(selectedExportBatch)}
+                      className="btn-primary text-sm flex items-center justify-center gap-2 shrink-0 py-2 px-5"
+                    >
+                      <Download size={16} /> Export to Excel
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Day & Session Schedule Configuration */}
+              <div className="card max-w-4xl mx-auto mt-6">
+                <div className="flex justify-between items-center mb-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                      <Clock size={20} className="text-blue-400" /> Day & Session Schedule (PPT / Prototype)
+                    </h3>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Configure Morning (FN) and Afternoon (AN) session modes for each of the 3 presentation days (6 Batches).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                  {/* Day 1 */}
+                  <div className="bg-black/30 p-4 rounded-xl border border-white/10">
+                    <h4 className="text-sm font-bold text-white mb-2">Day 1 (31st August)</h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs text-gray-300 mb-1">Morning (FN Session)</label>
+                        <select 
+                          value={evalSettings?.day1_fn_type || 'PPT'} 
+                          onChange={(e) => setEvalSettings({ ...evalSettings, day1_fn_type: e.target.value, day1_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                        >
+                          <option value="PPT">PPT Presentation</option>
+                          <option value="Prototype">Prototype Evaluation</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-300 mb-1">Afternoon (AN Session)</label>
+                        <select 
+                          value={evalSettings?.day1_an_type || 'Prototype'} 
+                          onChange={(e) => setEvalSettings({ ...evalSettings, day1_an_type: e.target.value })}
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                        >
+                          <option value="Prototype">Prototype Evaluation</option>
+                          <option value="PPT">PPT Presentation</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Day 2 */}
+                  <div className="bg-black/30 p-4 rounded-xl border border-white/10">
+                    <h4 className="text-sm font-bold text-white mb-2">Day 2 (1st September)</h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs text-gray-300 mb-1">Morning (FN Session)</label>
+                        <select 
+                          value={evalSettings?.day2_fn_type || 'Prototype'} 
+                          onChange={(e) => setEvalSettings({ ...evalSettings, day2_fn_type: e.target.value, day2_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                        >
+                          <option value="Prototype">Prototype Evaluation</option>
+                          <option value="PPT">PPT Presentation</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-300 mb-1">Afternoon (AN Session)</label>
+                        <select 
+                          value={evalSettings?.day2_an_type || 'PPT'} 
+                          onChange={(e) => setEvalSettings({ ...evalSettings, day2_an_type: e.target.value })}
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                        >
+                          <option value="PPT">PPT Presentation</option>
+                          <option value="Prototype">Prototype Evaluation</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Day 3 */}
+                  <div className="bg-black/30 p-4 rounded-xl border border-white/10">
+                    <h4 className="text-sm font-bold text-white mb-2">Day 3 (2nd September)</h4>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs text-gray-300 mb-1">Morning (FN Session)</label>
+                        <select 
+                          value={evalSettings?.day3_fn_type || 'PPT'} 
+                          onChange={(e) => setEvalSettings({ ...evalSettings, day3_fn_type: e.target.value, day3_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                        >
+                          <option value="PPT">PPT Presentation</option>
+                          <option value="Prototype">Prototype Evaluation</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-300 mb-1">Afternoon (AN Session)</label>
+                        <select 
+                          value={evalSettings?.day3_an_type || 'Prototype'} 
+                          onChange={(e) => setEvalSettings({ ...evalSettings, day3_an_type: e.target.value })}
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                        >
+                          <option value="Prototype">Prototype Evaluation</option>
+                          <option value="PPT">PPT Presentation</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <button 
+                    onClick={async () => {
+                      try {
+                        const { data: existing } = await supabase.from('evaluation_settings').select('id').limit(1);
+                        const schedulePayload = {
+                          day1_fn_type: evalSettings?.day1_fn_type || 'PPT',
+                          day1_an_type: evalSettings?.day1_an_type || 'Prototype',
+                          day2_fn_type: evalSettings?.day2_fn_type || 'Prototype',
+                          day2_an_type: evalSettings?.day2_an_type || 'PPT',
+                          day3_fn_type: evalSettings?.day3_fn_type || 'PPT',
+                          day3_an_type: evalSettings?.day3_an_type || 'Prototype',
+                          updated_at: new Date().toISOString()
+                        };
+                        if (existing && existing.length > 0) {
+                          await supabase.from('evaluation_settings').update(schedulePayload).eq('id', existing[0].id);
+                        } else {
+                          await supabase.from('evaluation_settings').insert([schedulePayload]);
+                        }
+                        alert("Day & Session schedule saved successfully!");
+                        fetchEvalData();
+                      } catch (err: any) {
+                        alert("Error saving schedule: " + err.message);
+                      }
+                    }}
+                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-5 py-2 rounded shadow-sm text-sm"
+                  >
+                    Save Schedule
+                  </button>
+                </div>
+              </div>
+
               <div className="card max-w-4xl mx-auto mt-6">
                 <div className="flex items-center gap-3 mb-6">
                   <div className="p-2 bg-primary/10 text-blue-300 rounded-lg"><Settings size={20} /></div>
@@ -1089,8 +1399,17 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
               <div className="card overflow-hidden p-0">
                 <div className="p-6 border-b border-white/10 flex flex-col md:flex-row justify-between items-center gap-4">
                   <h2 className="text-xl font-bold text-white flex items-center gap-4">Teams Evaluation <button onClick={handleExportEvaluations} className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 text-sm px-3 py-1 rounded"><Download size={16} /> Export</button></h2>
-                  
-                  <div className="flex flex-wrap items-center gap-4">
+                                  <div className="flex flex-wrap items-center gap-4">
+                    <div className="flex flex-col w-full md:w-auto">
+                      <label className="text-xs text-gray-300 mb-1">Batch</label>
+                      <select value={evalFilterBatch} onChange={e => setEvalFilterBatch(e.target.value)} className="text-sm border-white/20 rounded-md bg-black/30 backdrop-blur-xl border py-1.5 px-2 focus:ring-white/30 focus:border-white/30 max-w-[170px]">
+                        <option value="All">All Batches</option>
+                        {BATCH_OPTIONS.filter(b => b.id !== 'ALL').map(b => (
+                          <option key={b.id} value={b.id}>{b.id}</option>
+                        ))}
+                      </select>
+                    </div>
+
                     <div className="flex flex-col w-full md:w-auto">
                       <label className="text-xs text-gray-300 mb-1">Presentation Day</label>
                       <select value={evalFilterDay} onChange={e => setEvalFilterDay(e.target.value)} className="text-sm border-white/20 rounded-md bg-black/30 backdrop-blur-xl border py-1.5 px-2 focus:ring-white/30 focus:border-white/30 max-w-[150px]">
@@ -1124,10 +1443,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     <thead>
                       <tr className="border-b border-white/10 text-gray-300 text-sm bg-black/20">
                         <th className="p-4 font-semibold w-12 text-center">#</th>
-                        <th className="p-4 font-semibold">Team Name</th>
-                        <th className="p-4 font-semibold">PS / Day / Room</th>
+                        <th className="p-4 font-semibold">Team & Batch</th>
+                        <th className="p-4 font-semibold">PS / Slot / Room</th>
                         <th className="p-4 font-semibold text-center">Score (100)</th>
-       <th className="p-4 font-semibold text-center">Updates</th>
+                        <th className="p-4 font-semibold text-center">Updates</th>
                         <th className="p-4 font-semibold text-right">Action</th>
                       </tr>
                     </thead>
@@ -1135,16 +1454,29 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                       {filteredEvalTeams.map((team, index) => {
                         const ps = problemStatements.find(p => p.id === team.allocated_ps_id);
                         const evaluation = evaluations.find(e => e.team_id === team.id);
+                        const slot = getTeamSlotInfo(team);
                         return (
                           <tr key={team.id} className="border-b border-white/10 hover:bg-black/20 transition-colors">
                             <td className="p-4 text-sm text-center text-gray-300 font-medium">{index + 1}</td>
                             <td className="p-4 text-sm">
-                              <p className="font-semibold text-white cursor-pointer hover:underline" onClick={() => setSelectedTeam(team)}>{team.team_name}</p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="font-semibold text-white cursor-pointer hover:underline" onClick={() => {
+                                  setSelectedTeam(team);
+                                  setSlotDay(slot.day);
+                                  setSlotSession(slot.session);
+                                  setSlotSessionType(slot.sessionType);
+                                }}>
+                                  {team.team_name}
+                                </p>
+                                <span className="text-[10px] bg-blue-500/20 text-blue-300 border border-blue-500/30 px-1.5 py-0.5 rounded font-mono font-bold">
+                                  {slot.batch} ({slot.sessionType})
+                                </span>
+                              </div>
                               <p className="text-xs text-gray-400">{team.tl_email}</p>
                             </td>
                             <td className="p-4 text-sm">
                               <p className="font-medium text-blue-400">{ps?.id || 'N/A'}</p>
-                              <p className="text-xs text-gray-300">{ps?.presentation_day || 'No Day'} • Room: {ps?.room_number || 'N/A'}</p>
+                              <p className="text-xs text-gray-300">{slot.day} ({slot.session}) • Room: {slot.roomNumber}</p>
                             </td>
                             <td className="p-4 text-sm text-center">
                               {evaluation ? (
@@ -1385,6 +1717,98 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     <p className="text-blue-400/60 text-xs">Year</p>
                     <p className="font-medium text-white">{selectedTeam.tl_year || 'N/A'}</p>
                   </div>
+                </div>
+              </div>
+
+              {/* Presentation Slot & Batch Assignment */}
+              <div className="bg-white/5 rounded-xl p-4 border border-white/10 space-y-3">
+                <div className="flex justify-between items-center">
+                  <h5 className="text-xs font-bold text-gray-300 uppercase tracking-wider">Presentation Slot & Batch</h5>
+                  <span className="text-xs font-mono font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded">
+                    {getBatchFromDaySession(slotDay, slotSession)} • {slotSessionType}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] text-gray-400 mb-1 font-medium">Day</label>
+                    <select
+                      value={slotDay}
+                      onChange={(e) => setSlotDay(e.target.value)}
+                      className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                    >
+                      <option value="31st August">31st August (Day 1)</option>
+                      <option value="1st September">1st September (Day 2)</option>
+                      <option value="2nd September">2nd September (Day 3)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-gray-400 mb-1 font-medium">Session</label>
+                    <select
+                      value={slotSession}
+                      onChange={(e) => setSlotSession(e.target.value)}
+                      className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                    >
+                      <option value="FN">FN (Morning)</option>
+                      <option value="AN">AN (Afternoon)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-gray-400 mb-1 font-medium">Type</label>
+                    <select
+                      value={slotSessionType}
+                      onChange={(e) => setSlotSessionType(e.target.value)}
+                      className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                    >
+                      <option value="PPT">PPT</option>
+                      <option value="Prototype">Prototype</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <button
+                    disabled={savingSlot}
+                    onClick={async () => {
+                      setSavingSlot(true);
+                      try {
+                        const computedBatch = getBatchFromDaySession(slotDay, slotSession);
+                        const { error } = await supabase.from('teams').update({
+                          presentation_day: slotDay,
+                          session: slotSession,
+                          session_type: slotSessionType,
+                          batch: computedBatch
+                        }).eq('id', selectedTeam.id);
+
+                        if (error) {
+                          alert("Error saving slot: " + error.message);
+                        } else {
+                          alert("Presentation slot updated successfully!");
+                          setTeams(teams.map(t => t.id === selectedTeam.id ? {
+                            ...t,
+                            presentation_day: slotDay,
+                            session: slotSession,
+                            session_type: slotSessionType,
+                            batch: computedBatch
+                          } : t));
+                          setSelectedTeam({
+                            ...selectedTeam,
+                            presentation_day: slotDay,
+                            session: slotSession,
+                            session_type: slotSessionType,
+                            batch: computedBatch
+                          });
+                        }
+                      } catch (err: any) {
+                        alert("Error saving slot: " + err.message);
+                      } finally {
+                        setSavingSlot(false);
+                      }
+                    }}
+                    className="bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30 text-xs font-semibold py-1.5 px-4 rounded-lg transition-all"
+                  >
+                    {savingSlot ? 'Saving Slot...' : 'Save Presentation Slot'}
+                  </button>
                 </div>
               </div>
 

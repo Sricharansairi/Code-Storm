@@ -112,3 +112,17 @@ CREATE TABLE IF NOT EXISTS room_coordinators (
 
 ALTER TABLE room_coordinators ADD COLUMN IF NOT EXISTS faculty_coordinator text DEFAULT '';
 ALTER TABLE room_coordinators ADD COLUMN IF NOT EXISTS student_coordinator text DEFAULT '';
+
+-- 9. Team Presentation Slot & Batch Columns
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS presentation_day text;
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS session text;
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS session_type text;
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS batch text;
+
+ALTER TABLE evaluation_settings ADD COLUMN IF NOT EXISTS day1_fn_type text DEFAULT 'PPT';
+ALTER TABLE evaluation_settings ADD COLUMN IF NOT EXISTS day1_an_type text DEFAULT 'Prototype';
+ALTER TABLE evaluation_settings ADD COLUMN IF NOT EXISTS day2_fn_type text DEFAULT 'Prototype';
+ALTER TABLE evaluation_settings ADD COLUMN IF NOT EXISTS day2_an_type text DEFAULT 'PPT';
+ALTER TABLE evaluation_settings ADD COLUMN IF NOT EXISTS day3_fn_type text DEFAULT 'PPT';
+ALTER TABLE evaluation_settings ADD COLUMN IF NOT EXISTS day3_an_type text DEFAULT 'Prototype';
+
