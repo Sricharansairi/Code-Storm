@@ -1537,16 +1537,20 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
               onSubmit={async (e) => {
                 e.preventDefault();
                 setSavingEval(true);
-                const total = Number(evalScores.cat1) + Number(evalScores.cat2) + Number(evalScores.cat3) + Number(evalScores.cat4);
+                const c1 = Number(evalScores.cat1) || 0;
+                const c2 = Number(evalScores.cat2) || 0;
+                const c3 = Number(evalScores.cat3) || 0;
+                const c4 = Number(evalScores.cat4) || 0;
+                const total = c1 + c2 + c3 + c4;
                 
 
                 const existingEval = evaluations.find(e => e.team_id === teamToEvaluate.id);
                 const evalData = {
                   team_id: teamToEvaluate.id,
-                  cat1_score: Number(evalScores.cat1),
-                  cat2_score: Number(evalScores.cat2),
-                  cat3_score: Number(evalScores.cat3),
-                  cat4_score: Number(evalScores.cat4),
+                  cat1_score: c1,
+                  cat2_score: c2,
+                  cat3_score: c3,
+                  cat4_score: c4,
                   total_score: total,
                   evaluated_by: session.user.email,
                   update_count: existingEval ? (existingEval.update_count || 0) + 1 : 1
@@ -1570,29 +1574,29 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 <p className="text-sm text-gray-300 mb-2">Assign marks out of 25 for each category.</p>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
-                  <label className="text-sm font-semibold text-white">{evalSettings.category_1 || 'Category 1'}</label>
-                  <input type="number" min="0" max="25" required value={evalScores.cat1} onChange={e => setEvalScores({...evalScores, cat1: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
+                  <label className="text-sm font-semibold text-white">{evalSettings.categories?.[0]?.name || evalSettings.category_1 || 'Category 1'}</label>
+                  <input type="number" min="0" max="25" required value={evalScores.cat1 ?? 0} onChange={e => setEvalScores({...evalScores, cat1: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
                 </div>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
-                  <label className="text-sm font-semibold text-white">{evalSettings.category_2 || 'Category 2'}</label>
-                  <input type="number" min="0" max="25" required value={evalScores.cat2} onChange={e => setEvalScores({...evalScores, cat2: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
+                  <label className="text-sm font-semibold text-white">{evalSettings.categories?.[1]?.name || evalSettings.category_2 || 'Category 2'}</label>
+                  <input type="number" min="0" max="25" required value={evalScores.cat2 ?? 0} onChange={e => setEvalScores({...evalScores, cat2: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
                 </div>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
-                  <label className="text-sm font-semibold text-white">{evalSettings.category_3 || 'Category 3'}</label>
-                  <input type="number" min="0" max="25" required value={evalScores.cat3} onChange={e => setEvalScores({...evalScores, cat3: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
+                  <label className="text-sm font-semibold text-white">{evalSettings.categories?.[2]?.name || evalSettings.category_3 || 'Category 3'}</label>
+                  <input type="number" min="0" max="25" required value={evalScores.cat3 ?? 0} onChange={e => setEvalScores({...evalScores, cat3: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
                 </div>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
-                  <label className="text-sm font-semibold text-white">{evalSettings.category_4 || 'Category 4'}</label>
-                  <input type="number" min="0" max="25" required value={evalScores.cat4} onChange={e => setEvalScores({...evalScores, cat4: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
+                  <label className="text-sm font-semibold text-white">{evalSettings.categories?.[3]?.name || evalSettings.category_4 || 'Category 4'}</label>
+                  <input type="number" min="0" max="25" required value={evalScores.cat4 ?? 0} onChange={e => setEvalScores({...evalScores, cat4: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
                 </div>
                 
                 <div className="flex justify-between items-center pt-4 border-t border-white/10 mt-2">
                   <span className="text-sm text-gray-400 uppercase tracking-wider font-bold">Total Score</span>
                   <span className="text-2xl font-black text-white">
-                    {Number(evalScores.cat1) + Number(evalScores.cat2) + Number(evalScores.cat3) + Number(evalScores.cat4)} <span className="text-sm text-gray-500 font-normal">/ 100</span>
+                    {(Number(evalScores.cat1) || 0) + (Number(evalScores.cat2) || 0) + (Number(evalScores.cat3) || 0) + (Number(evalScores.cat4) || 0)} <span className="text-sm text-gray-500 font-normal">/ 100</span>
                   </span>
                 </div>
               </div>
