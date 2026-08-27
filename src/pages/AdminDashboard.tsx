@@ -75,9 +75,30 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const getTeamSlotInfo = (team: any) => {
     const ps = problemStatements.find(p => p.id === team.allocated_ps_id);
     
-    const day = team.presentation_day || ps?.presentation_day || '31st August';
-    const normDay = getDayNormalized(day);
-    
+    const rawDay = team.presentation_day || ps?.presentation_day;
+    if (!rawDay) {
+      return {
+        day: 'Unassigned',
+        dayNum: 'Unassigned',
+        isAssigned: false,
+        track: 'Unassigned',
+        isTrackA: false,
+        trackName: 'Unassigned',
+        batch: 'Unassigned',
+        badgeLabel: 'Unassigned',
+        pptRoom: '-',
+        protoRoom: '-',
+        fnMode: '-',
+        fnRoom: '-',
+        anMode: '-',
+        anRoom: '-',
+        session: 'Unassigned',
+        sessionType: 'Unassigned',
+        roomNumber: '-'
+      };
+    }
+
+    const normDay = getDayNormalized(rawDay);
     let dayNum = 'Day 1';
     let pptRoom = evalSettings?.day1_ppt_room || 'C-002';
     let protoRoom = evalSettings?.day1_proto_room || 'D-013';
@@ -109,6 +130,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     return {
       day: normDay,
       dayNum,
+      isAssigned: true,
       track,
       isTrackA,
       trackName,
@@ -361,8 +383,13 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     if (!ps) return false;
     
     const slot = getTeamSlotInfo(t);
-    if (evalFilterDay !== 'All' && getDayNormalized(slot.day) !== getDayNormalized(evalFilterDay)) return false;
-    if (evalFilterBatch !== 'All' && slot.batch !== evalFilterBatch) return false;
+    if (evalFilterDay !== 'All') {
+      if (!slot.isAssigned) return false;
+      if (getDayNormalized(slot.day) !== getDayNormalized(evalFilterDay)) return false;
+    }
+    if (evalFilterBatch !== 'All') {
+      if (!slot.isAssigned || slot.batch !== evalFilterBatch) return false;
+    }
     if (evalFilterPS !== 'All' && ps.id !== evalFilterPS) return false;
     const isEvaluated = evaluations.some(e => e.team_id === t.id);
     if (evalFilterStatus === 'Evaluated' && !isEvaluated) return false;
@@ -754,15 +781,13 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         await supabase.from('evaluation_settings').insert([schedulePayload]);
       }
 
-      // 2. Batch update problem statements
       for (const ps of problemStatements) {
         const track = ps.schedule_track || 'FN_PPT_AN_PROTO';
         await supabase.from('problem_statements').update({
           presentation_day: ps.presentation_day || null,
           schedule_track: track,
           session: track === 'FN_PROTO_AN_PPT' ? 'AN' : 'FN',
-          session_type: track === 'FN_PROTO_AN_PPT' ? 'Prototype' : 'PPT',
-          room_number: track === 'FN_PROTO_AN_PPT' ? evalSettings?.day1_proto_room : evalSettings?.day1_ppt_room
+          session_type: track === 'FN_PROTO_AN_PPT' ? 'Prototype' : 'PPT'
         }).eq('id', ps.id);
       }
 
@@ -772,6 +797,68 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       fetchTeams();
     } catch (err: any) {
       alert("Error saving schedule: " + err.message);
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
+  const handleResetAllScheduleAllocations = async () => {
+    const passcode = prompt("Enter Master Passcode to reset all Day & Track allocations (INDUS):");
+    if (passcode !== 'INDUS') {
+      alert("Incorrect master passcode. Reset cancelled.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Are you sure you want to reset all Problem Statement Day & Track allocations?\n\nThis will unassign all problem statements from Day 1, Day 2, and Day 3 so you can allocate freshly.\n(All team details, uploaded data, and marks will remain safe)."
+    );
+    if (!confirmed) return;
+
+    setSavingSchedule(true);
+    try {
+      // 1. Reset problem_statements allocations in DB
+      const { error: psError } = await supabase
+        .from('problem_statements')
+        .update({
+          presentation_day: null,
+          schedule_track: null,
+          batch: null,
+          session: null,
+          session_type: null,
+          room_number: null
+        })
+        .neq('id', '___nonexistent___');
+
+      if (psError) throw psError;
+
+      // 2. Reset team slot overrides if any
+      await supabase
+        .from('teams')
+        .update({
+          presentation_day: null,
+          schedule_track: null,
+          batch: null,
+          session: null,
+          session_type: null
+        })
+        .neq('id', '00000000-0000-0000-0000-000000000000');
+
+      // Update local state
+      setProblemStatements(prev => prev.map(ps => ({
+        ...ps,
+        presentation_day: null,
+        schedule_track: null,
+        batch: null,
+        session: null,
+        session_type: null,
+        room_number: null
+      })));
+
+      alert("All problem statement day and track allocations have been reset successfully! You can now allocate freshly.");
+      fetchProblemStatements();
+      fetchTeams();
+    } catch (err: any) {
+      alert("Error resetting allocations: " + err.message);
     } finally {
       setSavingSchedule(false);
     }
@@ -1433,13 +1520,23 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                       Configure dedicated PPT & Prototype rooms for each day. In FN, Track A does PPT in PPT Room while Track B does Prototype in Prototype Room; in AN, they automatically swap!
                     </p>
                   </div>
-                  <button 
-                    disabled={savingSchedule}
-                    onClick={handleSaveScheduleAndBatches}
-                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-6 py-2 rounded-lg shadow-sm text-sm transition-all font-medium flex items-center gap-2"
-                  >
-                    {savingSchedule ? 'Saving Schedules & Tracks...' : 'Save Dual-Room Schedule & Allocations'}
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button 
+                      disabled={savingSchedule}
+                      onClick={handleResetAllScheduleAllocations}
+                      className="bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/20 px-4 py-2 rounded-lg text-sm transition-all font-medium flex items-center gap-1.5"
+                      title="Reset all problem statement day and track assignments to start freshly"
+                    >
+                      <Trash2 size={16} /> Reset All Allocations
+                    </button>
+                    <button 
+                      disabled={savingSchedule}
+                      onClick={handleSaveScheduleAndBatches}
+                      className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-6 py-2 rounded-lg shadow-sm text-sm transition-all font-medium flex items-center gap-2"
+                    >
+                      {savingSchedule ? 'Saving Schedules & Tracks...' : 'Save Dual-Room Schedule & Allocations'}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-6">
