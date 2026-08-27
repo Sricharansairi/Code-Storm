@@ -1,0 +1,52 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+  
+  --color-primary: #38bdf8;
+  --color-primary-hover: #0ea5e9;
+}
+
+@layer base {
+  body {
+    background-color: #0f172a;
+    color: #f8fafc;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  
+  body::before {
+    content: '';
+    position: fixed;
+    top: -5%;
+    left: -5%;
+    width: 110%;
+    height: 110%;
+    background-image: url('/background.jpg');
+    background-size: cover;
+    background-position: center;
+    filter: blur(7px);
+    z-index: -1;
+  }
+}
+
+@layer components {
+  /* ── STANDARD CARD ─────────────────────────────────── */
+  .card {
+    @apply bg-black/40 backdrop-blur-xl rounded-xl border border-white/20 p-4 sm:p-5 transition-all duration-300;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  }
+  
+  .card:hover {
+    @apply -translate-y-1;
+  }
+  
+  .btn-primary {
+    @apply bg-white/10 backdrop-blur-xl hover:bg-white/20 text-white font-semibold py-2 px-6 rounded-lg transition-all duration-300 hover:-translate-y-0.5 active:scale-95 border border-white/20;
+  }
+
+  .btn-secondary {
+    @apply bg-white/5 hover:bg-white/10 text-gray-200 border border-white/20 font-semibold py-2 px-6 rounded-lg transition-all duration-300 hover:-translate-y-0.5 active:scale-95;
+  }
+}
