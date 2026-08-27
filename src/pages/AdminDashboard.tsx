@@ -1977,7 +1977,26 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                             </td>
                             <td className="p-4 text-sm">
                               <p className="font-medium text-gray-200">{ps?.id || 'N/A'}</p>
-                              <p className="text-xs text-gray-400">{slot.day} ({slot.session}) • Room: {slot.roomNumber}</p>
+                              <p className="text-xs text-gray-400">
+                                {slot.day} • <span className="text-gray-200 font-medium">{slot.session} ({slot.sessionType})</span> • Room: {slot.roomNumber}
+                              </p>
+                              {(() => {
+                                const norm = getDayNormalized(slot.day);
+                                let fnType = evalSettings?.day1_fn_type || 'PPT';
+                                let anType = evalSettings?.day1_an_type || 'Prototype';
+                                if (norm === '1st September') {
+                                  fnType = evalSettings?.day2_fn_type || 'Prototype';
+                                  anType = evalSettings?.day2_an_type || 'PPT';
+                                } else if (norm === '2nd September') {
+                                  fnType = evalSettings?.day3_fn_type || 'PPT';
+                                  anType = evalSettings?.day3_an_type || 'Prototype';
+                                }
+                                return (
+                                  <p className="text-[10px] text-gray-500 font-mono mt-0.5">
+                                    Schedule: FN = {fnType} | AN = {anType}
+                                  </p>
+                                );
+                              })()}
                             </td>
                             <td className="p-4 text-sm text-center">
                               {evaluation ? (
@@ -2578,17 +2597,43 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
     
       {/* Evaluation Modal */}
-      {evalModalOpen && teamToEvaluate && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-md">
-          <div className="card w-full max-w-md overflow-hidden border-white/30/30">
-            <div className="px-6 py-4 border-b border-white/30/20 flex justify-between items-center">
-              <h3 className="text-lg font-bold text-white">
-                Evaluate: {teamToEvaluate.team_name}
-              </h3>
-              <button type="button" onClick={() => setEvalModalOpen(false)} className="text-gray-300 hover:text-white transition-colors p-1 rounded-full hover:bg-black/30 backdrop-blur-xl/10">
-                <X size={20} />
-              </button>
-            </div>
+      {evalModalOpen && teamToEvaluate && (() => {
+        const evalSlot = getTeamSlotInfo(teamToEvaluate);
+        const norm = getDayNormalized(evalSlot.day);
+        let fnType = evalSettings?.day1_fn_type || 'PPT';
+        let anType = evalSettings?.day1_an_type || 'Prototype';
+        if (norm === '1st September') {
+          fnType = evalSettings?.day2_fn_type || 'Prototype';
+          anType = evalSettings?.day2_an_type || 'PPT';
+        } else if (norm === '2nd September') {
+          fnType = evalSettings?.day3_fn_type || 'PPT';
+          anType = evalSettings?.day3_an_type || 'Prototype';
+        }
+
+        return (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-md">
+            <div className="card w-full max-w-md overflow-hidden border-white/30/30">
+              <div className="px-6 py-4 border-b border-white/10 flex justify-between items-start">
+                <div>
+                  <h3 className="text-lg font-bold text-white">
+                    Evaluate: {teamToEvaluate.team_name}
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-2 mt-1">
+                    <span className="text-xs font-mono font-semibold bg-white/10 text-white px-2 py-0.5 rounded border border-white/10">
+                      {evalSlot.badgeLabel} • {evalSlot.sessionType}
+                    </span>
+                    <span className="text-xs text-gray-400">
+                      Room: {evalSlot.roomNumber}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-gray-400 font-mono mt-1">
+                    Schedule: FN = {fnType} | AN = {anType}
+                  </p>
+                </div>
+                <button type="button" onClick={() => setEvalModalOpen(false)} className="text-gray-300 hover:text-white transition-colors p-1 rounded-full hover:bg-black/30 backdrop-blur-xl/10">
+                  <X size={20} />
+                </button>
+              </div>
             
             <form 
               onSubmit={async (e) => {
@@ -2674,7 +2719,8 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
             </form>
           </div>
         </div>
-      )}
+        );
+      })()}
 </div>
   );
 }
