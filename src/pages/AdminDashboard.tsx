@@ -537,6 +537,101 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     XLSX.writeFile(workbook, filename);
   };
 
+  const [savingSchedule, setSavingSchedule] = useState(false);
+
+  const handleAssignPSToBatch = (psId: string, targetBatch: string) => {
+    let day = '31st August';
+    let session = 'FN';
+    if (targetBatch.startsWith('Day 1')) {
+      day = '31st August';
+      session = targetBatch.includes('AN') ? 'AN' : 'FN';
+    } else if (targetBatch.startsWith('Day 2')) {
+      day = '1st September';
+      session = targetBatch.includes('AN') ? 'AN' : 'FN';
+    } else if (targetBatch.startsWith('Day 3')) {
+      day = '2nd September';
+      session = targetBatch.includes('AN') ? 'AN' : 'FN';
+    }
+
+    setProblemStatements(prev => prev.map(ps => {
+      if (ps.id === psId) {
+        return {
+          ...ps,
+          batch: targetBatch,
+          presentation_day: day,
+          session: session
+        };
+      }
+      return ps;
+    }));
+  };
+
+  const handleUnassignPSFromBatch = (psId: string) => {
+    setProblemStatements(prev => prev.map(ps => {
+      if (ps.id === psId) {
+        return {
+          ...ps,
+          batch: null,
+          presentation_day: null,
+          session: 'FN'
+        };
+      }
+      return ps;
+    }));
+  };
+
+  const handleSaveScheduleAndBatches = async () => {
+    setSavingSchedule(true);
+    try {
+      // 1. Save schedule settings
+      const { data: existing } = await supabase.from('evaluation_settings').select('id').limit(1);
+      const schedulePayload = {
+        day1_fn_type: evalSettings?.day1_fn_type || 'PPT',
+        day1_an_type: evalSettings?.day1_an_type || 'Prototype',
+        day2_fn_type: evalSettings?.day2_fn_type || 'Prototype',
+        day2_an_type: evalSettings?.day2_an_type || 'PPT',
+        day3_fn_type: evalSettings?.day3_fn_type || 'PPT',
+        day3_an_type: evalSettings?.day3_an_type || 'Prototype',
+        updated_at: new Date().toISOString()
+      };
+      if (existing && existing.length > 0) {
+        await supabase.from('evaluation_settings').update(schedulePayload).eq('id', existing[0].id);
+      } else {
+        await supabase.from('evaluation_settings').insert([schedulePayload]);
+      }
+
+      // 2. Batch update problem statements
+      for (const ps of problemStatements) {
+        let defaultType = 'PPT';
+        const b = ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : null);
+        if (b) {
+          if (b.startsWith('Day 1')) {
+            defaultType = (ps.session === 'FN' || b.includes('FN')) ? (evalSettings?.day1_fn_type || 'PPT') : (evalSettings?.day1_an_type || 'Prototype');
+          } else if (b.startsWith('Day 2')) {
+            defaultType = (ps.session === 'FN' || b.includes('FN')) ? (evalSettings?.day2_fn_type || 'Prototype') : (evalSettings?.day2_an_type || 'PPT');
+          } else if (b.startsWith('Day 3')) {
+            defaultType = (ps.session === 'FN' || b.includes('FN')) ? (evalSettings?.day3_fn_type || 'PPT') : (evalSettings?.day3_an_type || 'Prototype');
+          }
+        }
+
+        await supabase.from('problem_statements').update({
+          batch: ps.batch || null,
+          presentation_day: ps.presentation_day || null,
+          session: ps.session || 'FN',
+          session_type: defaultType
+        }).eq('id', ps.id);
+      }
+
+      alert("Day & Session Schedule and Batch Allocations saved successfully!");
+      fetchEvalData();
+      fetchProblemStatements();
+      fetchTeams();
+    } catch (err: any) {
+      alert("Error saving schedule: " + err.message);
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
 
   const handleDeleteMarks = async (teamId: string) => {
     const passcode = prompt("Enter Master Passcode to delete marks:");
@@ -1178,119 +1273,453 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
               </div>
 
               {/* Day & Session Schedule Configuration */}
-              <div className="card max-w-4xl mx-auto mt-6">
-                <div className="flex justify-between items-center mb-4">
+              <div className="card max-w-5xl mx-auto mt-6">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
                   <div>
                     <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                      <Clock size={20} className="text-gray-300" /> Day & Session Schedule (PPT / Prototype)
+                      <Clock size={20} className="text-gray-300" /> Day & Session Schedule (6 Batches & Statement Allocations)
                     </h3>
                     <p className="text-xs text-gray-400 mt-1">
-                      Configure Morning (FN) and Afternoon (AN) session modes for each of the 3 presentation days (6 Batches).
+                      Configure evaluation modes (PPT / Prototype) and allocate problem statements directly to the 6 Batches.
                     </p>
                   </div>
+                  <button 
+                    disabled={savingSchedule}
+                    onClick={handleSaveScheduleAndBatches}
+                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-6 py-2 rounded-lg shadow-sm text-sm transition-all font-medium flex items-center gap-2"
+                  >
+                    {savingSchedule ? 'Saving Schedule & Allocations...' : 'Save Schedule & Allocations'}
+                  </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
                   {/* Day 1 */}
-                  <div className="bg-black/30 p-4 rounded-xl border border-white/10">
-                    <h4 className="text-sm font-bold text-white mb-2">Day 1 (31st August)</h4>
-                    <div className="space-y-3">
-                      <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-xs text-gray-300">Batch 1 (FN Morning)</label>
+                  <div className="bg-black/30 p-4 rounded-xl border border-white/10 space-y-4">
+                    <div className="border-b border-white/10 pb-2 flex justify-between items-center">
+                      <h4 className="text-sm font-bold text-white">Day 1 (31st August)</h4>
+                      <span className="text-[11px] text-gray-400 font-mono">Batches 1 & 2</span>
+                    </div>
+
+                    {/* Batch 1 */}
+                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <h5 className="text-xs font-bold text-white">Batch 1 (FN Morning)</h5>
                           <span className="text-[10px] text-gray-400 font-mono">09:30 AM</span>
                         </div>
+                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
+                          {evalSettings?.day1_fn_type || 'PPT'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
                         <select 
                           value={evalSettings?.day1_fn_type || 'PPT'} 
                           onChange={(e) => setEvalSettings({ ...evalSettings, day1_fn_type: e.target.value, day1_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
                         >
                           <option value="PPT">PPT Presentation</option>
                           <option value="Prototype">Prototype Evaluation</option>
                         </select>
                       </div>
+
                       <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-xs text-gray-300">Batch 2 (AN Afternoon)</label>
+                        <div className="flex justify-between items-center mb-1.5">
+                          <label className="text-[11px] text-gray-300 font-medium">
+                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - FN').length})
+                          </label>
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - FN').map(ps => (
+                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
+                              <span className="font-semibold">{ps.id}</span>
+                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
+                              <button
+                                type="button"
+                                onClick={() => handleUnassignPSFromBatch(ps.id)}
+                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
+                                title="Remove from batch"
+                              >
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))}
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - FN').length === 0 && (
+                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
+                          )}
+                        </div>
+
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 1 - FN');
+                          }}
+                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
+                        >
+                          <option value="">+ Add Statement to Batch 1...</option>
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 1 - FN').map(ps => (
+                            <option key={ps.id} value={ps.id}>
+                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Batch 2 */}
+                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <h5 className="text-xs font-bold text-white">Batch 2 (AN Afternoon)</h5>
                           <span className="text-[10px] text-gray-400 font-mono">01:30 PM</span>
                         </div>
+                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
+                          {evalSettings?.day1_an_type || 'Prototype'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
                         <select 
                           value={evalSettings?.day1_an_type || 'Prototype'} 
                           onChange={(e) => setEvalSettings({ ...evalSettings, day1_an_type: e.target.value, day1_fn_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
                         >
                           <option value="Prototype">Prototype Evaluation</option>
                           <option value="PPT">PPT Presentation</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between items-center mb-1.5">
+                          <label className="text-[11px] text-gray-300 font-medium">
+                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - AN').length})
+                          </label>
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - AN').map(ps => (
+                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
+                              <span className="font-semibold">{ps.id}</span>
+                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
+                              <button
+                                type="button"
+                                onClick={() => handleUnassignPSFromBatch(ps.id)}
+                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
+                                title="Remove from batch"
+                              >
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))}
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 1 - AN').length === 0 && (
+                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
+                          )}
+                        </div>
+
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 1 - AN');
+                          }}
+                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
+                        >
+                          <option value="">+ Add Statement to Batch 2...</option>
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 1 - AN').map(ps => (
+                            <option key={ps.id} value={ps.id}>
+                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
+                            </option>
+                          ))}
                         </select>
                       </div>
                     </div>
                   </div>
 
                   {/* Day 2 */}
-                  <div className="bg-black/30 p-4 rounded-xl border border-white/10">
-                    <h4 className="text-sm font-bold text-white mb-2">Day 2 (1st September)</h4>
-                    <div className="space-y-3">
-                      <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-xs text-gray-300">Batch 3 (FN Morning)</label>
+                  <div className="bg-black/30 p-4 rounded-xl border border-white/10 space-y-4">
+                    <div className="border-b border-white/10 pb-2 flex justify-between items-center">
+                      <h4 className="text-sm font-bold text-white">Day 2 (1st September)</h4>
+                      <span className="text-[11px] text-gray-400 font-mono">Batches 3 & 4</span>
+                    </div>
+
+                    {/* Batch 3 */}
+                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <h5 className="text-xs font-bold text-white">Batch 3 (FN Morning)</h5>
                           <span className="text-[10px] text-gray-400 font-mono">09:30 AM</span>
                         </div>
+                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
+                          {evalSettings?.day2_fn_type || 'Prototype'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
                         <select 
                           value={evalSettings?.day2_fn_type || 'Prototype'} 
                           onChange={(e) => setEvalSettings({ ...evalSettings, day2_fn_type: e.target.value, day2_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
                         >
                           <option value="Prototype">Prototype Evaluation</option>
                           <option value="PPT">PPT Presentation</option>
                         </select>
                       </div>
+
                       <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-xs text-gray-300">Batch 4 (AN Afternoon)</label>
+                        <div className="flex justify-between items-center mb-1.5">
+                          <label className="text-[11px] text-gray-300 font-medium">
+                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - FN').length})
+                          </label>
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - FN').map(ps => (
+                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
+                              <span className="font-semibold">{ps.id}</span>
+                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
+                              <button
+                                type="button"
+                                onClick={() => handleUnassignPSFromBatch(ps.id)}
+                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
+                                title="Remove from batch"
+                              >
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))}
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - FN').length === 0 && (
+                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
+                          )}
+                        </div>
+
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 2 - FN');
+                          }}
+                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
+                        >
+                          <option value="">+ Add Statement to Batch 3...</option>
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 2 - FN').map(ps => (
+                            <option key={ps.id} value={ps.id}>
+                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Batch 4 */}
+                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <h5 className="text-xs font-bold text-white">Batch 4 (AN Afternoon)</h5>
                           <span className="text-[10px] text-gray-400 font-mono">01:30 PM</span>
                         </div>
+                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
+                          {evalSettings?.day2_an_type || 'PPT'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
                         <select 
                           value={evalSettings?.day2_an_type || 'PPT'} 
                           onChange={(e) => setEvalSettings({ ...evalSettings, day2_an_type: e.target.value, day2_fn_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
                         >
                           <option value="PPT">PPT Presentation</option>
                           <option value="Prototype">Prototype Evaluation</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between items-center mb-1.5">
+                          <label className="text-[11px] text-gray-300 font-medium">
+                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - AN').length})
+                          </label>
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - AN').map(ps => (
+                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
+                              <span className="font-semibold">{ps.id}</span>
+                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
+                              <button
+                                type="button"
+                                onClick={() => handleUnassignPSFromBatch(ps.id)}
+                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
+                                title="Remove from batch"
+                              >
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))}
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 2 - AN').length === 0 && (
+                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
+                          )}
+                        </div>
+
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 2 - AN');
+                          }}
+                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
+                        >
+                          <option value="">+ Add Statement to Batch 4...</option>
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 2 - AN').map(ps => (
+                            <option key={ps.id} value={ps.id}>
+                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
+                            </option>
+                          ))}
                         </select>
                       </div>
                     </div>
                   </div>
 
                   {/* Day 3 */}
-                  <div className="bg-black/30 p-4 rounded-xl border border-white/10">
-                    <h4 className="text-sm font-bold text-white mb-2">Day 3 (2nd September)</h4>
-                    <div className="space-y-3">
-                      <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-xs text-gray-300">Batch 5 (FN Morning)</label>
+                  <div className="bg-black/30 p-4 rounded-xl border border-white/10 space-y-4">
+                    <div className="border-b border-white/10 pb-2 flex justify-between items-center">
+                      <h4 className="text-sm font-bold text-white">Day 3 (2nd September)</h4>
+                      <span className="text-[11px] text-gray-400 font-mono">Batches 5 & 6</span>
+                    </div>
+
+                    {/* Batch 5 */}
+                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <h5 className="text-xs font-bold text-white">Batch 5 (FN Morning)</h5>
                           <span className="text-[10px] text-gray-400 font-mono">09:30 AM</span>
                         </div>
+                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
+                          {evalSettings?.day3_fn_type || 'PPT'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
                         <select 
                           value={evalSettings?.day3_fn_type || 'PPT'} 
                           onChange={(e) => setEvalSettings({ ...evalSettings, day3_fn_type: e.target.value, day3_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
                         >
                           <option value="PPT">PPT Presentation</option>
                           <option value="Prototype">Prototype Evaluation</option>
                         </select>
                       </div>
+
                       <div>
-                        <div className="flex justify-between items-center mb-1">
-                          <label className="text-xs text-gray-300">Batch 6 (AN Afternoon)</label>
+                        <div className="flex justify-between items-center mb-1.5">
+                          <label className="text-[11px] text-gray-300 font-medium">
+                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - FN').length})
+                          </label>
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - FN').map(ps => (
+                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
+                              <span className="font-semibold">{ps.id}</span>
+                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
+                              <button
+                                type="button"
+                                onClick={() => handleUnassignPSFromBatch(ps.id)}
+                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
+                                title="Remove from batch"
+                              >
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))}
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - FN').length === 0 && (
+                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
+                          )}
+                        </div>
+
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 3 - FN');
+                          }}
+                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
+                        >
+                          <option value="">+ Add Statement to Batch 5...</option>
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 3 - FN').map(ps => (
+                            <option key={ps.id} value={ps.id}>
+                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Batch 6 */}
+                    <div className="bg-black/40 p-3.5 rounded-lg border border-white/10 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <h5 className="text-xs font-bold text-white">Batch 6 (AN Afternoon)</h5>
                           <span className="text-[10px] text-gray-400 font-mono">01:30 PM</span>
                         </div>
+                        <span className="text-[10px] bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium">
+                          {evalSettings?.day3_an_type || 'Prototype'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] text-gray-400 mb-1 font-medium">Evaluation Mode</label>
                         <select 
                           value={evalSettings?.day3_an_type || 'Prototype'} 
                           onChange={(e) => setEvalSettings({ ...evalSettings, day3_an_type: e.target.value, day3_fn_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
-                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                          className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/50 text-white"
                         >
                           <option value="Prototype">Prototype Evaluation</option>
                           <option value="PPT">PPT Presentation</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between items-center mb-1.5">
+                          <label className="text-[11px] text-gray-300 font-medium">
+                            Assigned Statements ({problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - AN').length})
+                          </label>
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1 bg-black/20 rounded-lg border border-white/5">
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - AN').map(ps => (
+                            <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/10 text-white px-2 py-0.5 rounded-md border border-white/10">
+                              <span className="font-semibold">{ps.id}</span>
+                              <span className="text-[10px] text-gray-400">({ps.current_teams}t)</span>
+                              <button
+                                type="button"
+                                onClick={() => handleUnassignPSFromBatch(ps.id)}
+                                className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
+                                title="Remove from batch"
+                              >
+                                <X size={12} />
+                              </button>
+                            </span>
+                          ))}
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) === 'Day 3 - AN').length === 0 && (
+                            <p className="text-[11px] text-gray-500 italic p-0.5">No statements assigned</p>
+                          )}
+                        </div>
+
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            if (e.target.value) handleAssignPSToBatch(e.target.value, 'Day 3 - AN');
+                          }}
+                          className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
+                        >
+                          <option value="">+ Add Statement to Batch 6...</option>
+                          {problemStatements.filter(ps => (ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : '')) !== 'Day 3 - AN').map(ps => (
+                            <option key={ps.id} value={ps.id}>
+                              {ps.id} - {ps.title.substring(0, 22)}... ({ps.current_teams} teams)
+                            </option>
+                          ))}
                         </select>
                       </div>
                     </div>
@@ -1299,32 +1728,11 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
                 <div className="flex justify-end">
                   <button 
-                    onClick={async () => {
-                      try {
-                        const { data: existing } = await supabase.from('evaluation_settings').select('id').limit(1);
-                        const schedulePayload = {
-                          day1_fn_type: evalSettings?.day1_fn_type || 'PPT',
-                          day1_an_type: evalSettings?.day1_an_type || 'Prototype',
-                          day2_fn_type: evalSettings?.day2_fn_type || 'Prototype',
-                          day2_an_type: evalSettings?.day2_an_type || 'PPT',
-                          day3_fn_type: evalSettings?.day3_fn_type || 'PPT',
-                          day3_an_type: evalSettings?.day3_an_type || 'Prototype',
-                          updated_at: new Date().toISOString()
-                        };
-                        if (existing && existing.length > 0) {
-                          await supabase.from('evaluation_settings').update(schedulePayload).eq('id', existing[0].id);
-                        } else {
-                          await supabase.from('evaluation_settings').insert([schedulePayload]);
-                        }
-                        alert("Day & Session schedule saved successfully!");
-                        fetchEvalData();
-                      } catch (err: any) {
-                        alert("Error saving schedule: " + err.message);
-                      }
-                    }}
-                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-5 py-2 rounded-lg shadow-sm text-sm transition-all font-medium"
+                    disabled={savingSchedule}
+                    onClick={handleSaveScheduleAndBatches}
+                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-6 py-2 rounded-lg shadow-sm text-sm transition-all font-medium"
                   >
-                    Save Schedule
+                    {savingSchedule ? 'Saving Schedule & Allocations...' : 'Save Schedule & Allocations'}
                   </button>
                 </div>
               </div>
