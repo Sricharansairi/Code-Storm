@@ -2009,7 +2009,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                             <td className="p-4 text-sm text-center text-gray-300 font-medium">{index + 1}</td>
                             <td className="p-4 text-sm">
                               <div className="flex flex-wrap items-center gap-2">
-                                <p className="font-semibold text-white cursor-pointer hover:underline" onClick={() => {
+                                <p className="font-bold text-white text-base cursor-pointer hover:underline" onClick={() => {
                                   setSelectedTeam(team);
                                   setSlotDay(slot.day);
                                   setSlotSession(slot.session);
@@ -2017,34 +2017,45 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                 }}>
                                   {team.team_name}
                                 </p>
-                                <span className="text-[11px] bg-white/5 border border-white/10 text-gray-300 px-2 py-0.5 rounded font-medium">
+                                <span className="text-xs font-mono font-bold bg-white/15 text-white border border-white/30 px-2.5 py-0.5 rounded-md shadow-sm tracking-wide">
                                   {slot.badgeLabel}
                                 </span>
                               </div>
-                              <p className="text-xs text-gray-400">{team.tl_email}</p>
+                              <p className="text-xs text-gray-300 mt-0.5">{team.tl_email}</p>
                             </td>
                             <td className="p-4 text-sm">
-                              <p className="font-medium text-gray-200">{ps?.id || 'N/A'}</p>
-                              <p className="text-xs text-gray-400">
-                                {slot.day} • <span className="text-gray-200 font-medium">{slot.session} ({slot.sessionType})</span> • Room: {slot.roomNumber}
-                              </p>
-                              {(() => {
-                                const norm = getDayNormalized(slot.day);
-                                let fnType = evalSettings?.day1_fn_type || 'PPT';
-                                let anType = evalSettings?.day1_an_type || 'Prototype';
-                                if (norm === '1st September') {
-                                  fnType = evalSettings?.day2_fn_type || 'Prototype';
-                                  anType = evalSettings?.day2_an_type || 'PPT';
-                                } else if (norm === '2nd September') {
-                                  fnType = evalSettings?.day3_fn_type || 'PPT';
-                                  anType = evalSettings?.day3_an_type || 'Prototype';
-                                }
-                                return (
-                                  <p className="text-[10px] text-gray-500 font-mono mt-0.5">
-                                    Schedule: FN = {fnType} | AN = {anType}
-                                  </p>
-                                );
-                              })()}
+                              <div className="space-y-1.5">
+                                <p className="font-bold text-white text-sm">{ps?.id || 'N/A'}</p>
+                                <div className="flex flex-wrap items-center gap-2 text-xs text-gray-200">
+                                  <span className="font-medium text-gray-200">{slot.day}</span>
+                                  <span className="text-gray-400">•</span>
+                                  <span className="font-bold text-white bg-white/20 border border-white/30 px-2 py-0.5 rounded text-xs font-mono">
+                                    {slot.session} ({slot.sessionType})
+                                  </span>
+                                  <span className="text-gray-400">•</span>
+                                  <span className="text-gray-300">Room: <strong className="text-white font-bold">{slot.roomNumber}</strong></span>
+                                </div>
+                                {(() => {
+                                  const norm = getDayNormalized(slot.day);
+                                  let fnType = evalSettings?.day1_fn_type || 'PPT';
+                                  let anType = evalSettings?.day1_an_type || 'Prototype';
+                                  if (norm === '1st September') {
+                                    fnType = evalSettings?.day2_fn_type || 'Prototype';
+                                    anType = evalSettings?.day2_an_type || 'PPT';
+                                  } else if (norm === '2nd September') {
+                                    fnType = evalSettings?.day3_fn_type || 'PPT';
+                                    anType = evalSettings?.day3_an_type || 'Prototype';
+                                  }
+                                  return (
+                                    <div className="inline-flex items-center gap-2 text-xs text-gray-200 bg-white/10 border border-white/20 px-2.5 py-1 rounded-md font-mono">
+                                      <span className="text-gray-300 font-medium">Day Schedule:</span>
+                                      <span className="font-bold text-white">FN: {fnType}</span>
+                                      <span className="text-gray-400 font-bold">|</span>
+                                      <span className="font-bold text-white">AN: {anType}</span>
+                                    </div>
+                                  );
+                                })()}
+                              </div>
                             </td>
                             <td className="p-4 text-sm text-center">
                               {evaluation ? (
