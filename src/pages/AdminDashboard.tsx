@@ -47,13 +47,13 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   }, []);
 
   const BATCH_OPTIONS = [
-    { id: 'ALL', label: 'All Batches / Tracks' },
-    { id: 'Day 1 - Track A', label: 'Day 1: Track A (FN PPT ➔ AN Proto)' },
-    { id: 'Day 1 - Track B', label: 'Day 1: Track B (FN Proto ➔ AN PPT)' },
-    { id: 'Day 2 - Track A', label: 'Day 2: Track A (FN PPT ➔ AN Proto)' },
-    { id: 'Day 2 - Track B', label: 'Day 2: Track B (FN Proto ➔ AN PPT)' },
-    { id: 'Day 3 - Track A', label: 'Day 3: Track A (FN PPT ➔ AN Proto)' },
-    { id: 'Day 3 - Track B', label: 'Day 3: Track B (FN Proto ➔ AN PPT)' },
+    { id: 'ALL', label: 'All Batches (Batch 1 to 6)' },
+    { id: 'Batch 1', label: 'Batch 1: Day 1 - Track A (FN PPT ➔ AN Proto)' },
+    { id: 'Batch 2', label: 'Batch 2: Day 1 - Track B (FN Proto ➔ AN PPT)' },
+    { id: 'Batch 3', label: 'Batch 3: Day 2 - Track A (FN PPT ➔ AN Proto)' },
+    { id: 'Batch 4', label: 'Batch 4: Day 2 - Track B (FN Proto ➔ AN PPT)' },
+    { id: 'Batch 5', label: 'Batch 5: Day 3 - Track A (FN PPT ➔ AN Proto)' },
+    { id: 'Batch 6', label: 'Batch 6: Day 3 - Track B (FN Proto ➔ AN PPT)' },
   ];
 
   const getDayNormalized = (dayStr?: string) => {
@@ -68,9 +68,15 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const getBatchFromDaySession = (day?: string, session: string = 'FN') => {
     const normDay = getDayNormalized(day);
     let dayNum = 'Day 1';
-    if (normDay === '1st September') dayNum = 'Day 2';
-    else if (normDay === '2nd September') dayNum = 'Day 3';
-    return `${dayNum} - ${session || 'FN'}`;
+    let batchNum = session === 'AN' ? 'Batch 2' : 'Batch 1';
+    if (normDay === '1st September') {
+      dayNum = 'Day 2';
+      batchNum = session === 'AN' ? 'Batch 4' : 'Batch 3';
+    } else if (normDay === '2nd September') {
+      dayNum = 'Day 3';
+      batchNum = session === 'AN' ? 'Batch 6' : 'Batch 5';
+    }
+    return `${batchNum} (${dayNum} - ${session || 'FN'})`;
   };
 
   const normalizePS = (str?: string) => {
@@ -102,6 +108,8 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         track: 'Unassigned',
         isTrackA: false,
         trackName: 'Unassigned',
+        batchNumber: 0,
+        batchName: 'Unassigned',
         batch: 'Unassigned',
         badgeLabel: 'Unassigned',
         pptRoom: '-',
@@ -163,8 +171,19 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     const anRoom = isTrackA ? protoRoom : pptRoom;
 
     const trackName = isTrackA ? 'Track A' : 'Track B';
-    const batch = `${dayNum} - ${trackName}`;
-    const badgeLabel = `${dayNum}/${trackName} (${isTrackA ? 'FN PPT' : 'FN Proto'})${isSplit ? ' [50/50 Split]' : ''}`;
+
+    let batchNumber = 1;
+    if (dayNum === 'Day 1') {
+      batchNumber = isTrackA ? 1 : 2;
+    } else if (dayNum === 'Day 2') {
+      batchNumber = isTrackA ? 3 : 4;
+    } else if (dayNum === 'Day 3') {
+      batchNumber = isTrackA ? 5 : 6;
+    }
+
+    const batchName = `Batch ${batchNumber}`;
+    const batch = `Batch ${batchNumber} (${dayNum} - ${trackName})`;
+    const badgeLabel = `Batch ${batchNumber}: ${dayNum}/${trackName} (${isTrackA ? 'FN PPT' : 'FN Proto'})${isSplit ? ' [50/50 Split]' : ''}`;
 
     return {
       day: normDay,
@@ -174,6 +193,8 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       track: isTrackA ? 'FN_PPT_AN_PROTO' : 'FN_PROTO_AN_PPT',
       isTrackA,
       trackName,
+      batchNumber,
+      batchName,
       batch,
       badgeLabel,
       pptRoom,
@@ -432,7 +453,9 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       if (getDayNormalized(slot.day) !== getDayNormalized(evalFilterDay)) return false;
     }
     if (evalFilterBatch !== 'All') {
-      if (!slot.isAssigned || slot.batch !== evalFilterBatch) return false;
+      if (!slot.isAssigned) return false;
+      const match = slot.batchName === evalFilterBatch || slot.batch === evalFilterBatch || slot.batch.startsWith(evalFilterBatch);
+      if (!match) return false;
     }
     if (evalFilterPS !== 'All' && !isPSMatch(ps.id, evalFilterPS)) return false;
     const isEvaluated = evaluations.some(e => e.team_id === t.id);
@@ -641,7 +664,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     
     const filteredTeams = (targetBatch === 'ALL' || targetBatch === 'All') 
       ? activeTeams 
-      : activeTeams.filter(t => getTeamSlotInfo(t).batch === targetBatch);
+      : activeTeams.filter(t => {
+          const slot = getTeamSlotInfo(t);
+          return slot.batchName === targetBatch || slot.batch === targetBatch || slot.batch.startsWith(targetBatch);
+        });
 
     if (filteredTeams.length === 0) {
       alert("No active teams found for the selected batch.");
@@ -1927,9 +1953,69 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
 
               <div className="card overflow-hidden p-0">
-                <div className="p-6 border-b border-white/10 flex flex-col md:flex-row justify-between items-center gap-4">
-                  <h2 className="text-xl font-bold text-white flex items-center gap-4">Teams Evaluation <button onClick={handleExportEvaluations} className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 text-sm px-3 py-1 rounded"><Download size={16} /> Export</button></h2>
-                                  <div className="flex flex-wrap items-center gap-4">
+                <div className="p-6 border-b border-white/10 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                  <div>
+                    <h2 className="text-xl font-bold text-white flex items-center gap-3">
+                      Teams Evaluation
+                    </h2>
+                    <p className="text-xs text-gray-400 mt-0.5">Filter and evaluate presentations or export full evaluation sheets</p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Quick export filtered list */}
+                    <button 
+                      onClick={handleExportEvaluations} 
+                      className="flex items-center justify-center gap-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/10 text-xs px-3 py-1.5 rounded-lg transition-all font-medium"
+                      title="Export current filtered view to Excel"
+                    >
+                      <Download size={14} /> Export Filtered
+                    </button>
+
+                    {/* Export by Batch Dropdown */}
+                    <div className="flex items-center gap-1 bg-black/40 border border-white/15 rounded-lg p-1">
+                      <select 
+                        value={selectedExportBatch} 
+                        onChange={e => setSelectedExportBatch(e.target.value)}
+                        className="bg-transparent text-xs text-white border-0 focus:ring-0 py-1 pl-2 pr-1 cursor-pointer"
+                      >
+                        <option value="ALL" className="bg-gray-900 text-white">All Batches (1-6)</option>
+                        {BATCH_OPTIONS.filter(b => b.id !== 'ALL').map(b => (
+                          <option key={b.id} value={b.id} className="bg-gray-900 text-white">{b.id}</option>
+                        ))}
+                      </select>
+                      <button 
+                        onClick={() => handleExportEvaluationsByBatch(selectedExportBatch)}
+                        className="bg-primary/20 hover:bg-primary/40 text-blue-300 hover:text-white text-xs px-2.5 py-1 rounded transition-all flex items-center gap-1 font-medium"
+                        title="Download PPT & Prototype sheets for selected batch"
+                      >
+                        <Download size={13} /> Batch XLSX
+                      </button>
+                    </div>
+
+                    {/* Export by PS Dropdown */}
+                    <div className="flex items-center gap-1 bg-black/40 border border-white/15 rounded-lg p-1">
+                      <select 
+                        value={selectedExportPS} 
+                        onChange={e => setSelectedExportPS(e.target.value)}
+                        className="bg-transparent text-xs text-white border-0 focus:ring-0 py-1 pl-2 pr-1 cursor-pointer"
+                      >
+                        <option value="ALL" className="bg-gray-900 text-white">All Statements</option>
+                        {problemStatements.map(ps => (
+                          <option key={ps.id} value={ps.id} className="bg-gray-900 text-white">{ps.id}</option>
+                        ))}
+                      </select>
+                      <button 
+                        onClick={() => handleExportEvaluationsByPS(selectedExportPS)}
+                        className="bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 hover:text-white text-xs px-2.5 py-1 rounded transition-all flex items-center gap-1 font-medium"
+                        title="Download PPT & Prototype sheets for selected problem statement"
+                      >
+                        <Download size={13} /> PS XLSX
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-black/20 border-b border-white/10 flex flex-wrap items-center gap-4">
                     <div className="flex flex-col w-full md:w-auto">
                       <label className="text-xs text-gray-300 mb-1">Batch</label>
                       <select value={evalFilterBatch} onChange={e => setEvalFilterBatch(e.target.value)} className="text-sm border-white/20 rounded-md bg-black/30 backdrop-blur-xl border py-1.5 px-2 focus:ring-white/30 focus:border-white/30 max-w-[170px]">
@@ -1966,7 +2052,6 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                       </select>
                     </div>
                   </div>
-                </div>
 
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
@@ -2056,26 +2141,45 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                   </table>
                 </div>
               </div>
-              <div className="mt-12 border-t border-white/10/10 pt-8">
-                <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><div className="p-2 bg-primary/10 text-blue-300 rounded-lg">📋</div> Certificates & Awards</h2>
-            <div className="card max-w-2xl mx-auto text-center py-12">
-              <div className="w-16 h-16 bg-blue-500/15 text-blue-400 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-blue-500/20">
-                <Download size={32} />
+            </motion.div>
+          )}
+
+          {activeTab === 'certificates' && (
+            <motion.div 
+              key="certificates"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3, ease: "circOut" }}
+              className="space-y-6"
+            >
+              <div className="card max-w-2xl mx-auto text-center py-12">
+                <div className="w-16 h-16 bg-blue-500/15 text-blue-400 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-blue-500/20">
+                  <Download size={32} />
+                </div>
+                <h2 className="text-2xl font-bold text-white mb-2">Certificate Generation</h2>
+                <p className="text-gray-300 mb-8 max-w-md mx-auto">
+                  The mechanism for uploading a participation certificate template and enabling dynamic generation is currently under development.
+                </p>
+                
+                <div className="border-2 border-dashed border-white/20 rounded-xl p-8 bg-black/20">
+                  <Upload size={32} className="mx-auto text-gray-400 mb-3" />
+                  <p className="text-sm font-medium text-gray-300 mb-1">Template Upload Placeholder</p>
+                  <p className="text-xs text-gray-500">Coming soon in a future update.</p>
+                </div>
               </div>
-              <h2 className="text-2xl font-bold text-white mb-2">Certificate Generation</h2>
-              <p className="text-gray-300 mb-8 max-w-md mx-auto">
-                The mechanism for uploading a participation certificate template and enabling dynamic generation is currently under development.
-              </p>
-              
-              <div className="border-2 border-dashed border-white/20 rounded-xl p-8 bg-black/20">
-                <Upload size={32} className="mx-auto text-gray-400 mb-3" />
-                <p className="text-sm font-medium text-gray-300 mb-1">Template Upload Placeholder</p>
-                <p className="text-xs text-gray-500">Coming soon in a future update.</p>
-              </div>
-              </div>
-              <div className="mt-12 border-t border-white/10/10 pt-8">
-                <h2 className="text-xl font-bold mb-6 flex items-center gap-2"> Room & Logistics</h2>
-            <div className="space-y-6">
+            </motion.div>
+          )}
+
+          {activeTab === 'logistics' && (
+            <motion.div 
+              key="logistics"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3, ease: "circOut" }}
+              className="space-y-6"
+            >
               <div className="card">
                 <div className="flex justify-between items-center mb-6">
                   <div className="flex flex-wrap items-center gap-3">
@@ -2200,7 +2304,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                             if (error) alert("Error adding room: " + error.message);
                             else fetchCoordinators();
                           }
-                        }}
+                        }} 
                         className="mt-3 inline-flex items-center gap-2 btn-secondary text-sm"
                       >
                         <Plus size={16} /> Add Room Manually
@@ -2208,9 +2312,6 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     </div>
                   )}
                 </div>
-              </div>
-              </div>
-              </div>
               </div>
             </motion.div>
           )}
