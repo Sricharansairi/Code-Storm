@@ -217,6 +217,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const [teamToEvaluate, setTeamToEvaluate] = useState<any>(null);
   const [evalScores, setEvalScores] = useState<Record<string, number>>({});
   const [savingEval, setSavingEval] = useState(false);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   // Team Slot Edit States (in Team Details Modal)
   const [slotBatch, setSlotBatch] = useState('Day 1 - FN');
@@ -739,10 +740,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       });
     });
 
-    const safeBatch = (targetBatch === 'ALL' || targetBatch === 'All') 
-      ? 'All_Batches' 
-      : targetBatch.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const filename = `CodeStorm_Evaluations_${safeBatch}.xlsx`;
+    let filename = `${targetBatch}.xlsx`;
+    if (targetBatch === 'ALL' || targetBatch === 'All') {
+      filename = 'All Batches.xlsx';
+    }
 
     exportStyledExcel([
       { sheetName: 'PPT Presentations', data: pptRows },
@@ -1953,69 +1954,19 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
 
               <div className="card overflow-hidden p-0">
-                <div className="p-6 border-b border-white/10 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-                  <div>
-                    <h2 className="text-xl font-bold text-white flex items-center gap-3">
-                      Teams Evaluation
-                    </h2>
-                    <p className="text-xs text-gray-400 mt-0.5">Filter and evaluate presentations or export full evaluation sheets</p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    {/* Quick export filtered list */}
+                <div className="p-6 border-b border-white/10 flex flex-col md:flex-row justify-between items-center gap-4">
+                  <h2 className="text-xl font-bold text-white flex items-center gap-4">
+                    Teams Evaluation 
                     <button 
-                      onClick={handleExportEvaluations} 
-                      className="flex items-center justify-center gap-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/10 text-xs px-3 py-1.5 rounded-lg transition-all font-medium"
-                      title="Export current filtered view to Excel"
+                      onClick={() => setExportModalOpen(true)} 
+                      className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 text-sm px-3 py-1 rounded transition-all cursor-pointer font-medium"
+                      title="Open Export Options"
                     >
-                      <Download size={14} /> Export Filtered
+                      <Download size={16} /> Export
                     </button>
+                  </h2>
 
-                    {/* Export by Batch Dropdown */}
-                    <div className="flex items-center gap-1 bg-black/40 border border-white/15 rounded-lg p-1">
-                      <select 
-                        value={selectedExportBatch} 
-                        onChange={e => setSelectedExportBatch(e.target.value)}
-                        className="bg-transparent text-xs text-white border-0 focus:ring-0 py-1 pl-2 pr-1 cursor-pointer"
-                      >
-                        <option value="ALL" className="bg-gray-900 text-white">All Batches (1-6)</option>
-                        {BATCH_OPTIONS.filter(b => b.id !== 'ALL').map(b => (
-                          <option key={b.id} value={b.id} className="bg-gray-900 text-white">{b.id}</option>
-                        ))}
-                      </select>
-                      <button 
-                        onClick={() => handleExportEvaluationsByBatch(selectedExportBatch)}
-                        className="bg-primary/20 hover:bg-primary/40 text-blue-300 hover:text-white text-xs px-2.5 py-1 rounded transition-all flex items-center gap-1 font-medium"
-                        title="Download PPT & Prototype sheets for selected batch"
-                      >
-                        <Download size={13} /> Batch XLSX
-                      </button>
-                    </div>
-
-                    {/* Export by PS Dropdown */}
-                    <div className="flex items-center gap-1 bg-black/40 border border-white/15 rounded-lg p-1">
-                      <select 
-                        value={selectedExportPS} 
-                        onChange={e => setSelectedExportPS(e.target.value)}
-                        className="bg-transparent text-xs text-white border-0 focus:ring-0 py-1 pl-2 pr-1 cursor-pointer"
-                      >
-                        <option value="ALL" className="bg-gray-900 text-white">All Statements</option>
-                        {problemStatements.map(ps => (
-                          <option key={ps.id} value={ps.id} className="bg-gray-900 text-white">{ps.id}</option>
-                        ))}
-                      </select>
-                      <button 
-                        onClick={() => handleExportEvaluationsByPS(selectedExportPS)}
-                        className="bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 hover:text-white text-xs px-2.5 py-1 rounded transition-all flex items-center gap-1 font-medium"
-                        title="Download PPT & Prototype sheets for selected problem statement"
-                      >
-                        <Download size={13} /> PS XLSX
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-4 bg-black/20 border-b border-white/10 flex flex-wrap items-center gap-4">
+                  <div className="flex flex-wrap items-center gap-4">
                     <div className="flex flex-col w-full md:w-auto">
                       <label className="text-xs text-gray-300 mb-1">Batch</label>
                       <select value={evalFilterBatch} onChange={e => setEvalFilterBatch(e.target.value)} className="text-sm border-white/20 rounded-md bg-black/30 backdrop-blur-xl border py-1.5 px-2 focus:ring-white/30 focus:border-white/30 max-w-[170px]">
@@ -2052,6 +2003,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                       </select>
                     </div>
                   </div>
+                </div>
 
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
@@ -3102,6 +3054,117 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         </div>
         );
       })()}
+
+      {/* Export Evaluations Options Modal */}
+      {exportModalOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-md">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="card max-w-lg w-full overflow-hidden shadow-2xl space-y-6"
+          >
+            <div className="flex justify-between items-center pb-3 border-b border-white/10">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Download className="text-primary" size={20} /> Export Evaluation Sheets
+              </h3>
+              <button onClick={() => setExportModalOpen(false)} className="text-gray-400 hover:text-white p-1 transition-colors">
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Option 1: Download Batch Wise */}
+            <div className="p-4 rounded-xl bg-black/40 border border-white/10 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-semibold text-sm text-blue-300">📦 Download Batch-wise</h4>
+                <span className="text-xs text-gray-400">PPT & Prototype tabs</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <select 
+                  value={selectedExportBatch} 
+                  onChange={e => setSelectedExportBatch(e.target.value)}
+                  className="flex-1 bg-black/60 border border-white/20 rounded-lg py-2 px-3 text-sm text-white focus:ring-1 focus:ring-primary"
+                >
+                  <option value="Batch 1">Batch 1 (Day 1 - Track A)</option>
+                  <option value="Batch 2">Batch 2 (Day 1 - Track B)</option>
+                  <option value="Batch 3">Batch 3 (Day 2 - Track A)</option>
+                  <option value="Batch 4">Batch 4 (Day 2 - Track B)</option>
+                  <option value="Batch 5">Batch 5 (Day 3 - Track A)</option>
+                  <option value="Batch 6">Batch 6 (Day 3 - Track B)</option>
+                  <option value="ALL">All Batches (1 to 6)</option>
+                </select>
+                <button 
+                  onClick={() => {
+                    handleExportEvaluationsByBatch(selectedExportBatch);
+                    setExportModalOpen(false);
+                  }}
+                  className="bg-primary hover:bg-primary/80 text-white text-sm px-4 py-2 rounded-lg font-medium transition-all shrink-0 flex items-center gap-1.5 cursor-pointer shadow-md"
+                >
+                  <Download size={15} /> Download
+                </button>
+              </div>
+              <p className="text-[11px] text-gray-400">
+                File will be downloaded as: <code className="text-purple-300 font-mono font-bold">{selectedExportBatch === 'ALL' ? 'All Batches.xlsx' : `${selectedExportBatch}.xlsx`}</code>
+              </p>
+            </div>
+
+            {/* Option 2: Download Current Filtered Table */}
+            <div className="p-4 rounded-xl bg-black/40 border border-white/10 flex items-center justify-between gap-4">
+              <div>
+                <h4 className="font-semibold text-sm text-gray-200">🔍 Download Current Filtered View</h4>
+                <p className="text-xs text-gray-400">Exports active teams matching current filters</p>
+              </div>
+              <button 
+                onClick={() => {
+                  handleExportEvaluations();
+                  setExportModalOpen(false);
+                }}
+                className="bg-white/10 hover:bg-white/20 text-white text-sm px-4 py-2 rounded-lg font-medium border border-white/15 transition-all shrink-0 flex items-center gap-1.5 cursor-pointer"
+              >
+                <Download size={15} /> Download
+              </button>
+            </div>
+
+            {/* Option 3: Download Problem Statement Wise */}
+            <div className="p-4 rounded-xl bg-black/40 border border-white/10 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-semibold text-sm text-purple-300">🎯 Download by Problem Statement</h4>
+                <span className="text-xs text-gray-400">Select statement</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <select 
+                  value={selectedExportPS} 
+                  onChange={e => setSelectedExportPS(e.target.value)}
+                  className="flex-1 bg-black/60 border border-white/20 rounded-lg py-2 px-3 text-sm text-white focus:ring-1 focus:ring-purple-500"
+                >
+                  <option value="ALL">All Statements</option>
+                  {problemStatements.map(ps => (
+                    <option key={ps.id} value={ps.id}>{ps.id} - {ps.title.substring(0, 25)}...</option>
+                  ))}
+                </select>
+                <button 
+                  onClick={() => {
+                    handleExportEvaluationsByPS(selectedExportPS);
+                    setExportModalOpen(false);
+                  }}
+                  className="bg-purple-600 hover:bg-purple-700 text-white text-sm px-4 py-2 rounded-lg font-medium transition-all shrink-0 flex items-center gap-1.5 cursor-pointer shadow-md"
+                >
+                  <Download size={15} /> Download
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button 
+                onClick={() => setExportModalOpen(false)}
+                className="px-4 py-2 text-sm text-gray-300 hover:text-white bg-white/5 hover:bg-white/10 rounded-lg transition-all"
+              >
+                Close
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
 </div>
   );
 }
