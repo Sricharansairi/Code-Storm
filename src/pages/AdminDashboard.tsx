@@ -81,6 +81,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         day: 'Unassigned',
         dayNum: 'Unassigned',
         isAssigned: false,
+        isSplit: false,
         track: 'Unassigned',
         isTrackA: false,
         trackName: 'Unassigned',
@@ -113,9 +114,30 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       protoRoom = evalSettings?.day3_proto_room || 'D-013';
     }
 
-    // Determine track: Track A (FN PPT -> AN Proto) vs Track B (FN Proto -> AN PPT)
-    const track = ps?.schedule_track || team.schedule_track || (ps?.session === 'AN' ? 'FN_PROTO_AN_PPT' : 'FN_PPT_AN_PROTO');
-    const isTrackA = track !== 'FN_PROTO_AN_PPT';
+    // Determine track: Track A vs Track B (or Split 50/50)
+    const psMode = ps?.session || ps?.schedule_track || 'FN';
+    let isTrackA = true;
+    let isSplit = false;
+
+    if (team.schedule_track === 'FN_PROTO_AN_PPT' || team.session === 'AN') {
+      isTrackA = false;
+    } else if (team.schedule_track === 'FN_PPT_AN_PROTO' || team.session === 'FN') {
+      isTrackA = true;
+    } else if (psMode === 'SPLIT' || psMode === 'SPLIT_50_50') {
+      isSplit = true;
+      // Find all active teams allocated to this PS and sort them deterministically
+      const psTeams = teams
+        .filter(t => t.allocated_ps_id === ps?.id && !t.is_disabled)
+        .sort((a, b) => a.team_name.localeCompare(b.team_name));
+      const teamIdx = psTeams.findIndex(t => t.id === team.id);
+      const halfCount = Math.ceil(psTeams.length / 2);
+      // First half (0..halfCount-1) -> Track A, Second half -> Track B
+      isTrackA = teamIdx < halfCount;
+    } else if (psMode === 'AN' || psMode === 'FN_PROTO_AN_PPT') {
+      isTrackA = false;
+    } else {
+      isTrackA = true;
+    }
 
     const fnMode = isTrackA ? 'PPT' : 'Prototype';
     const fnRoom = isTrackA ? pptRoom : protoRoom;
@@ -125,13 +147,14 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
     const trackName = isTrackA ? 'Track A' : 'Track B';
     const batch = `${dayNum} - ${trackName}`;
-    const badgeLabel = `${dayNum}/${trackName} (${isTrackA ? 'FN PPT' : 'FN Proto'})`;
+    const badgeLabel = `${dayNum}/${trackName} (${isTrackA ? 'FN PPT' : 'FN Proto'})${isSplit ? ' [50/50 Split]' : ''}`;
 
     return {
       day: normDay,
       dayNum,
       isAssigned: true,
-      track,
+      isSplit,
+      track: isTrackA ? 'FN_PPT_AN_PROTO' : 'FN_PROTO_AN_PPT',
       isTrackA,
       trackName,
       batch,
@@ -725,14 +748,15 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
   const [savingSchedule, setSavingSchedule] = useState(false);
 
-  const handleAssignPSToTrack = (psId: string, day: string, track: 'FN_PPT_AN_PROTO' | 'FN_PROTO_AN_PPT') => {
+  const handleAssignPSToTrack = (psId: string, day: string, track: 'FN_PPT_AN_PROTO' | 'FN_PROTO_AN_PPT' | 'SPLIT') => {
     setProblemStatements(prev => prev.map(ps => {
       if (ps.id === psId) {
+        const sessionVal = track === 'SPLIT' ? 'SPLIT' : track === 'FN_PROTO_AN_PPT' ? 'AN' : 'FN';
         return {
           ...ps,
           presentation_day: day,
+          session: sessionVal,
           schedule_track: track,
-          session: track === 'FN_PROTO_AN_PPT' ? 'AN' : 'FN',
           session_type: track === 'FN_PROTO_AN_PPT' ? 'Prototype' : 'PPT'
         };
       }
@@ -748,7 +772,8 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
           presentation_day: null,
           schedule_track: null,
           batch: null,
-          session: 'FN'
+          session: null,
+          session_type: null
         };
       }
       return ps;
@@ -781,13 +806,14 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         await supabase.from('evaluation_settings').insert([schedulePayload]);
       }
 
+      // 2. Batch update problem statements with existing columns (presentation_day, session, session_type)
       for (const ps of problemStatements) {
-        const track = ps.schedule_track || 'FN_PPT_AN_PROTO';
+        const sessionVal = ps.session || (ps.schedule_track === 'FN_PROTO_AN_PPT' ? 'AN' : ps.schedule_track === 'SPLIT' ? 'SPLIT' : 'FN');
+        const defaultType = sessionVal === 'AN' ? 'Prototype' : 'PPT';
         await supabase.from('problem_statements').update({
           presentation_day: ps.presentation_day || null,
-          schedule_track: track,
-          session: track === 'FN_PROTO_AN_PPT' ? 'AN' : 'FN',
-          session_type: track === 'FN_PROTO_AN_PPT' ? 'Prototype' : 'PPT'
+          session: sessionVal,
+          session_type: defaultType
         }).eq('id', ps.id);
       }
 
@@ -816,12 +842,11 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
     setSavingSchedule(true);
     try {
-      // 1. Reset problem_statements allocations in DB
+      // 1. Reset problem_statements allocations in DB using ONLY existing columns
       const { error: psError } = await supabase
         .from('problem_statements')
         .update({
           presentation_day: null,
-          schedule_track: null,
           batch: null,
           session: null,
           session_type: null,
@@ -836,7 +861,6 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         .from('teams')
         .update({
           presentation_day: null,
-          schedule_track: null,
           batch: null,
           session: null,
           session_type: null
@@ -1548,8 +1572,9 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     const currentPptRoom = evalSettings?.[d.pptKey] || d.defaultPpt;
                     const currentProtoRoom = evalSettings?.[d.protoKey] || d.defaultProto;
 
-                    const trackAPS = problemStatements.filter(ps => ps.presentation_day === d.dayKey && (ps.schedule_track === 'FN_PPT_AN_PROTO' || !ps.schedule_track));
-                    const trackBPS = problemStatements.filter(ps => ps.presentation_day === d.dayKey && ps.schedule_track === 'FN_PROTO_AN_PPT');
+                    const trackAPS = problemStatements.filter(ps => ps.presentation_day === d.dayKey && (ps.session === 'FN' || ps.schedule_track === 'FN_PPT_AN_PROTO') && ps.session !== 'SPLIT' && ps.schedule_track !== 'SPLIT');
+                    const trackBPS = problemStatements.filter(ps => ps.presentation_day === d.dayKey && (ps.session === 'AN' || ps.schedule_track === 'FN_PROTO_AN_PPT') && ps.session !== 'SPLIT' && ps.schedule_track !== 'SPLIT');
+                    const splitPS = problemStatements.filter(ps => ps.presentation_day === d.dayKey && (ps.session === 'SPLIT' || ps.schedule_track === 'SPLIT'));
 
                     return (
                       <div key={d.dayKey} className="bg-black/30 p-5 rounded-xl border border-white/10 space-y-4">
@@ -1585,15 +1610,15 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                           </div>
                         </div>
 
-                        {/* Dual Tracks Cards */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Tracks & Split Grid */}
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                           {/* Track A */}
                           <div className="bg-black/40 p-4 rounded-lg border border-white/10 space-y-3">
                             <div className="flex justify-between items-center">
                               <div>
-                                <h5 className="text-sm font-bold text-white">Track A (FN: PPT ➔ AN: Prototype)</h5>
+                                <h5 className="text-sm font-bold text-white">Track A (Whole PS)</h5>
                                 <p className="text-[11px] text-gray-300 font-mono mt-0.5">
-                                  FN (09:30 AM): PPT in <strong>{currentPptRoom}</strong> | AN (01:30 PM): Proto in <strong>{currentProtoRoom}</strong>
+                                  FN: PPT ({currentPptRoom}) ➔ AN: Proto ({currentProtoRoom})
                                 </p>
                               </div>
                               <span className="text-xs bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium shrink-0">
@@ -1606,11 +1631,11 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                               <label className="block text-[11px] text-gray-300 font-medium mb-1.5">
                                 Assigned Problem Statements:
                               </label>
-                              <div className="flex flex-wrap gap-1.5 mb-2 max-h-28 overflow-y-auto p-1.5 bg-black/20 rounded-lg border border-white/5">
+                              <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1.5 bg-black/20 rounded-lg border border-white/5">
                                 {trackAPS.map(ps => (
-                                  <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/15 text-white px-2.5 py-1 rounded-md border border-white/15">
+                                  <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/15 text-white px-2 py-0.5 rounded-md border border-white/15">
                                     <span className="font-bold">{ps.id}</span>
-                                    <span className="text-[10px] text-gray-300">({ps.current_teams} teams)</span>
+                                    <span className="text-[10px] text-gray-300">({ps.current_teams}t)</span>
                                     <button
                                       type="button"
                                       onClick={() => handleUnassignPSFromTrack(ps.id)}
@@ -1622,7 +1647,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                   </span>
                                 ))}
                                 {trackAPS.length === 0 && (
-                                  <p className="text-[11px] text-gray-500 italic p-1">No statements assigned to Track A</p>
+                                  <p className="text-[11px] text-gray-500 italic p-1">No statements in Track A</p>
                                 )}
                               </div>
 
@@ -1633,10 +1658,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                 }}
                                 className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
                               >
-                                <option value="">+ Add Statement to Track A ({d.dayName})...</option>
-                                {problemStatements.filter(ps => ps.presentation_day !== d.dayKey || ps.schedule_track === 'FN_PROTO_AN_PPT').map(ps => (
+                                <option value="">+ Add PS to Track A...</option>
+                                {problemStatements.filter(ps => ps.presentation_day !== d.dayKey || ps.session !== 'FN').map(ps => (
                                   <option key={ps.id} value={ps.id}>
-                                    {ps.id} - {ps.title.substring(0, 26)}... ({ps.current_teams} teams)
+                                    {ps.id} - {ps.title.substring(0, 24)}... ({ps.current_teams} teams)
                                   </option>
                                 ))}
                               </select>
@@ -1647,9 +1672,9 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                           <div className="bg-black/40 p-4 rounded-lg border border-white/10 space-y-3">
                             <div className="flex justify-between items-center">
                               <div>
-                                <h5 className="text-sm font-bold text-white">Track B (FN: Prototype ➔ AN: PPT)</h5>
+                                <h5 className="text-sm font-bold text-white">Track B (Whole PS)</h5>
                                 <p className="text-[11px] text-gray-300 font-mono mt-0.5">
-                                  FN (09:30 AM): Proto in <strong>{currentProtoRoom}</strong> | AN (01:30 PM): PPT in <strong>{currentPptRoom}</strong>
+                                  FN: Proto ({currentProtoRoom}) ➔ AN: PPT ({currentPptRoom})
                                 </p>
                               </div>
                               <span className="text-xs bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium shrink-0">
@@ -1662,11 +1687,11 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                               <label className="block text-[11px] text-gray-300 font-medium mb-1.5">
                                 Assigned Problem Statements:
                               </label>
-                              <div className="flex flex-wrap gap-1.5 mb-2 max-h-28 overflow-y-auto p-1.5 bg-black/20 rounded-lg border border-white/5">
+                              <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1.5 bg-black/20 rounded-lg border border-white/5">
                                 {trackBPS.map(ps => (
-                                  <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/15 text-white px-2.5 py-1 rounded-md border border-white/15">
+                                  <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/15 text-white px-2 py-0.5 rounded-md border border-white/15">
                                     <span className="font-bold">{ps.id}</span>
-                                    <span className="text-[10px] text-gray-300">({ps.current_teams} teams)</span>
+                                    <span className="text-[10px] text-gray-300">({ps.current_teams}t)</span>
                                     <button
                                       type="button"
                                       onClick={() => handleUnassignPSFromTrack(ps.id)}
@@ -1678,7 +1703,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                   </span>
                                 ))}
                                 {trackBPS.length === 0 && (
-                                  <p className="text-[11px] text-gray-500 italic p-1">No statements assigned to Track B</p>
+                                  <p className="text-[11px] text-gray-500 italic p-1">No statements in Track B</p>
                                 )}
                               </div>
 
@@ -1689,10 +1714,68 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                                 }}
                                 className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
                               >
-                                <option value="">+ Add Statement to Track B ({d.dayName})...</option>
-                                {problemStatements.filter(ps => ps.presentation_day !== d.dayKey || ps.schedule_track !== 'FN_PROTO_AN_PPT').map(ps => (
+                                <option value="">+ Add PS to Track B...</option>
+                                {problemStatements.filter(ps => ps.presentation_day !== d.dayKey || ps.session !== 'AN').map(ps => (
                                   <option key={ps.id} value={ps.id}>
-                                    {ps.id} - {ps.title.substring(0, 26)}... ({ps.current_teams} teams)
+                                    {ps.id} - {ps.title.substring(0, 24)}... ({ps.current_teams} teams)
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* 50/50 Split Track (Half Track A + Half Track B) */}
+                          <div className="bg-black/40 p-4 rounded-lg border border-white/10 space-y-3">
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <h5 className="text-sm font-bold text-white flex items-center gap-1.5">
+                                  <span>⚡</span> 50/50 Split (Both Tracks)
+                                </h5>
+                                <p className="text-[11px] text-gray-300 font-mono mt-0.5">
+                                  Half 1: FN PPT ➔ AN Proto | Half 2: FN Proto ➔ AN PPT
+                                </p>
+                              </div>
+                              <span className="text-xs bg-white/10 text-gray-200 px-2 py-0.5 rounded font-mono font-medium shrink-0">
+                                {splitPS.length} PS
+                              </span>
+                            </div>
+
+                            {/* Assigned Statements Chips */}
+                            <div>
+                              <label className="block text-[11px] text-gray-300 font-medium mb-1.5">
+                                Assigned Problem Statements:
+                              </label>
+                              <div className="flex flex-wrap gap-1.5 mb-2 max-h-24 overflow-y-auto p-1.5 bg-black/20 rounded-lg border border-white/5">
+                                {splitPS.map(ps => (
+                                  <span key={ps.id} className="inline-flex items-center gap-1.5 text-xs bg-white/15 text-white px-2 py-0.5 rounded-md border border-white/15">
+                                    <span className="font-bold">{ps.id}</span>
+                                    <span className="text-[10px] text-gray-300">({ps.current_teams}t - 50/50)</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUnassignPSFromTrack(ps.id)}
+                                      className="text-gray-400 hover:text-red-400 transition-colors ml-0.5"
+                                      title="Remove from track"
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  </span>
+                                ))}
+                                {splitPS.length === 0 && (
+                                  <p className="text-[11px] text-gray-500 italic p-1">No statements in 50/50 Split</p>
+                                )}
+                              </div>
+
+                              <select
+                                value=""
+                                onChange={(e) => {
+                                  if (e.target.value) handleAssignPSToTrack(e.target.value, d.dayKey, 'SPLIT');
+                                }}
+                                className="w-full text-xs py-1.5 px-2 border border-white/10 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors cursor-pointer"
+                              >
+                                <option value="">+ Add PS to 50/50 Split...</option>
+                                {problemStatements.filter(ps => ps.presentation_day !== d.dayKey || ps.session !== 'SPLIT').map(ps => (
+                                  <option key={ps.id} value={ps.id}>
+                                    {ps.id} - {ps.title.substring(0, 24)}... ({ps.current_teams} teams)
                                   </option>
                                 ))}
                               </select>
