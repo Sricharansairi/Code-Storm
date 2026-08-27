@@ -291,10 +291,20 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     XLSX.writeFile(workbook, "CodeStorm_Evaluations.xlsx");
   };
 
-  const handleExportEvaluationsByPS = () => {
+  const [selectedExportPS, setSelectedExportPS] = useState('ALL');
+
+  const handleExportEvaluationsByPS = (targetPS: string = selectedExportPS) => {
     const exportData: any[] = [];
+    const targetStatements = targetPS === 'ALL' 
+      ? problemStatements 
+      : problemStatements.filter(ps => ps.id === targetPS);
+
+    if (targetStatements.length === 0) {
+      alert("No matching Problem Statements found to export.");
+      return;
+    }
     
-    problemStatements.forEach((ps) => {
+    targetStatements.forEach((ps) => {
       const allocatedTeams = teams.filter(t => t.allocated_ps_id === ps.id && !t.is_disabled);
       
       if (allocatedTeams.length === 0) {
@@ -345,10 +355,15 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       }
     });
 
+    const filename = targetPS === 'ALL' 
+      ? 'CodeStorm_Evaluations_All_Problem_Statements.xlsx' 
+      : `CodeStorm_Evaluations_${targetPS}.xlsx`;
+    const sheetName = targetPS === 'ALL' ? 'All_PS_Evaluations' : targetPS.replace(/[:\\/?*\[\]]/g, '_');
+
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "By_Problem_Statement");
-    XLSX.writeFile(workbook, "CodeStorm_Evaluations_By_Problem_Statement.xlsx");
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+    XLSX.writeFile(workbook, filename);
   };
 
 
@@ -415,7 +430,9 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       sponsor: newPS.sponsor,
       description: newPS.description,
       categories: categoriesArray,
-      max_teams: newPS.max_teams
+      max_teams: newPS.max_teams,
+      presentation_day: newPS.presentation_day || null,
+      room_number: newPS.room_number || null
     }]);
 
     if (error) {
@@ -903,21 +920,35 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
               {/* Export Reports by Problem Statement */}
               <div className="card max-w-4xl mx-auto mt-6">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                   <div>
                     <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
                       <Download size={20} className="text-blue-400" /> Export Reports by Problem Statement
                     </h3>
                     <p className="text-xs text-gray-400">
-                      Export all team names, details, and evaluation marks grouped by each Problem Statement to an Excel sheet.
+                      Choose a specific Problem Statement or All Statements to export team evaluations into Excel.
                     </p>
                   </div>
-                  <button 
-                    onClick={handleExportEvaluationsByPS}
-                    className="btn-primary text-sm flex items-center gap-2 shrink-0 py-2.5 px-5"
-                  >
-                    <Download size={16} /> Export to Excel
-                  </button>
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
+                    <select
+                      value={selectedExportPS}
+                      onChange={(e) => setSelectedExportPS(e.target.value)}
+                      className="text-sm border-white/20 rounded-lg bg-black/40 backdrop-blur-xl border py-2 px-3 focus:ring-white/30 focus:border-white/30 text-white min-w-[220px]"
+                    >
+                      <option value="ALL">All Problem Statements</option>
+                      {problemStatements.map((ps) => (
+                        <option key={ps.id} value={ps.id}>
+                          {ps.id} - {ps.title.substring(0, 30)}...
+                        </option>
+                      ))}
+                    </select>
+                    <button 
+                      onClick={() => handleExportEvaluationsByPS(selectedExportPS)}
+                      className="btn-primary text-sm flex items-center justify-center gap-2 shrink-0 py-2 px-5"
+                    >
+                      <Download size={16} /> Export to Excel
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -959,6 +990,31 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                       <label className="block text-xs font-medium text-gray-300 mb-1">Categories (comma separated)</label>
                       <input type="text" value={newPS.categories} onChange={e=>setNewPS({...newPS, categories: e.target.value})} placeholder="e.g. AI/ML, Healthcare" className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg w-full text-sm" />
                     </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-300 mb-1">Presentation Day</label>
+                        <select 
+                          value={newPS.presentation_day} 
+                          onChange={e => setNewPS({...newPS, presentation_day: e.target.value})} 
+                          className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/30 text-white"
+                        >
+                          <option value="">Select Day (Optional)</option>
+                          <option value="31st August">31st August</option>
+                          <option value="1st September">1st September</option>
+                          <option value="2nd September">2nd September</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-300 mb-1">Room Number</label>
+                        <input 
+                          type="text" 
+                          placeholder="e.g. Room 201, Lab 3" 
+                          value={newPS.room_number} 
+                          onChange={e => setNewPS({...newPS, room_number: e.target.value})} 
+                          className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/30 text-white placeholder-gray-500" 
+                        />
+                      </div>
+                    </div>
                     <button type="submit" className="w-full btn-primary py-2 text-sm">Save Statement</button>
                   </form>
                 </div>
@@ -974,7 +1030,11 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                         <li key={ps.id} className="p-4 flex items-center justify-between hover:bg-white/5 border-b border-white/5 last:border-0">
                           <div>
                             <p className="font-bold text-sm text-white">{ps.id}: <span className="font-normal text-gray-300">{ps.title.substring(0,25)}...</span></p>
-                            <p className="text-xs text-gray-500 mt-1">Current: {ps.current_teams} / Max: {ps.max_teams}</p>
+                            <div className="flex flex-wrap items-center gap-2 text-xs mt-1">
+                              <span className="text-gray-400">Teams: {ps.current_teams} / {ps.max_teams}</span>
+                              <span className="text-blue-400">• Day: {ps.presentation_day || 'Not Set'}</span>
+                              <span className="text-emerald-400">• Room: {ps.room_number || 'Not Set'}</span>
+                            </div>
                           </div>
                           <div className="flex items-center gap-2">
                             <button onClick={() => openEditModal(ps)} className="p-2 text-gray-400 hover:text-blue-300 transition-colors bg-black/40 border border-white/10 rounded hover:bg-white/10" title="Edit Statement">
