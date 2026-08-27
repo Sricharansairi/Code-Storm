@@ -66,9 +66,28 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
   const getTeamSlotInfo = (team: any) => {
     const ps = problemStatements.find(p => p.id === team.allocated_ps_id);
-    const day = team.presentation_day || ps?.presentation_day || '31st August';
-    const session = team.session || ps?.session || 'FN';
-    const batch = team.batch || getBatchFromDaySession(day, session);
+    
+    // Batch either from team override or from problem statement
+    let batch = team.batch || ps?.batch;
+    let day = team.presentation_day || ps?.presentation_day;
+    let session = team.session || ps?.session;
+    
+    if (batch) {
+      if (batch.startsWith('Day 1')) {
+        day = '31st August';
+        session = batch.includes('AN') ? 'AN' : 'FN';
+      } else if (batch.startsWith('Day 2')) {
+        day = '1st September';
+        session = batch.includes('AN') ? 'AN' : 'FN';
+      } else if (batch.startsWith('Day 3')) {
+        day = '2nd September';
+        session = batch.includes('AN') ? 'AN' : 'FN';
+      }
+    } else {
+      day = day || '31st August';
+      session = session || 'FN';
+      batch = getBatchFromDaySession(day, session);
+    }
     
     let defaultType = 'PPT';
     if (batch.startsWith('Day 1')) {
@@ -106,6 +125,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const [savingEval, setSavingEval] = useState(false);
 
   // Team Slot Edit States (in Team Details Modal)
+  const [slotBatch, setSlotBatch] = useState('Day 1 - FN');
   const [slotDay, setSlotDay] = useState('31st August');
   const [slotSession, setSlotSession] = useState('FN');
   const [slotSessionType, setSlotSessionType] = useState('PPT');
@@ -166,6 +186,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   useEffect(() => {
     if (selectedTeam) {
       const slot = getTeamSlotInfo(selectedTeam);
+      setSlotBatch(slot.batch);
       setSlotDay(slot.day);
       setSlotSession(slot.session);
       setSlotSessionType(slot.sessionType);
@@ -174,7 +195,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
   // Settings States
   const [problemStatements, setProblemStatements] = useState<any[]>([]);
-  const [newPS, setNewPS] = useState({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, presentation_day: '', session: 'FN', session_type: 'PPT', room_number: '' });
+  const [newPS, setNewPS] = useState({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, batch: '', presentation_day: '', session: 'FN', session_type: 'PPT', room_number: '' });
   const [editingPSId, setEditingPSId] = useState<string | null>(null);
   const [deleteCode, setDeleteCode] = useState('');
   const [settingsMessage, setSettingsMessage] = useState({ text: '', type: '' });
@@ -182,7 +203,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   // Custom Modal States
   const [modalOpen, setModalOpen] = useState(false);
   const [modalType, setModalType] = useState<'edit' | 'delete' | 'add' | 'edit-team' | 'delete-team' | null>(null);
-  const [modalPS, setModalPS] = useState<any>({ presentation_day: '31st August', session: 'FN', session_type: 'PPT', room_number: '' });
+  const [modalPS, setModalPS] = useState<any>({ batch: '', presentation_day: '31st August', session: 'FN', session_type: 'PPT', room_number: '' });
   const [modalCode, setModalCode] = useState('');
   const [modalError, setModalError] = useState('');
   const [newTeam, setNewTeam] = useState({ team_name: '', tl_email: '' });
@@ -581,6 +602,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       description: newPS.description,
       categories: categoriesArray,
       max_teams: newPS.max_teams,
+      batch: newPS.batch || null,
       presentation_day: newPS.presentation_day || null,
       session: newPS.session || 'FN',
       session_type: newPS.session_type || 'PPT',
@@ -591,7 +613,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       setSettingsMessage({ text: error.message, type: 'error' });
     } else {
       setSettingsMessage({ text: editingPSId ? 'Problem statement updated successfully!' : 'Problem statement added successfully!', type: 'success' });
-      setNewPS({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, presentation_day: '', session: 'FN', session_type: 'PPT', room_number: '' });
+      setNewPS({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, batch: '', presentation_day: '', session: 'FN', session_type: 'PPT', room_number: '' });
       setEditingPSId(null);
       fetchProblemStatements();
     }
@@ -630,6 +652,21 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     setModalError('');
     
     if (modalType === 'edit') {
+      const psBatch = modalPS.batch || (modalPS.presentation_day ? getBatchFromDaySession(modalPS.presentation_day, modalPS.session || 'FN') : '');
+      let day = modalPS.presentation_day || '';
+      let sess = modalPS.session || 'FN';
+      if (psBatch) {
+        if (psBatch.startsWith('Day 1')) {
+          day = '31st August';
+          sess = psBatch.includes('AN') ? 'AN' : 'FN';
+        } else if (psBatch.startsWith('Day 2')) {
+          day = '1st September';
+          sess = psBatch.includes('AN') ? 'AN' : 'FN';
+        } else if (psBatch.startsWith('Day 3')) {
+          day = '2nd September';
+          sess = psBatch.includes('AN') ? 'AN' : 'FN';
+        }
+      }
       setNewPS({
         id: modalPS.id,
         title: modalPS.title,
@@ -637,8 +674,9 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         description: modalPS.description,
         categories: (modalPS.categories || []).join(', '),
         max_teams: modalPS.max_teams,
-        presentation_day: modalPS.presentation_day || '',
-        session: modalPS.session || 'FN',
+        batch: psBatch,
+        presentation_day: day,
+        session: sess,
         session_type: modalPS.session_type || 'PPT',
         room_number: modalPS.room_number || ''
       });
@@ -1158,7 +1196,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     <h4 className="text-sm font-bold text-white mb-2">Day 1 (31st August)</h4>
                     <div className="space-y-3">
                       <div>
-                        <label className="block text-xs text-gray-300 mb-1">Morning (FN Session)</label>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-xs text-gray-300">Batch 1 (FN Morning)</label>
+                          <span className="text-[10px] text-gray-400 font-mono">09:30 AM</span>
+                        </div>
                         <select 
                           value={evalSettings?.day1_fn_type || 'PPT'} 
                           onChange={(e) => setEvalSettings({ ...evalSettings, day1_fn_type: e.target.value, day1_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
@@ -1169,10 +1210,13 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs text-gray-300 mb-1">Afternoon (AN Session)</label>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-xs text-gray-300">Batch 2 (AN Afternoon)</label>
+                          <span className="text-[10px] text-gray-400 font-mono">01:30 PM</span>
+                        </div>
                         <select 
                           value={evalSettings?.day1_an_type || 'Prototype'} 
-                          onChange={(e) => setEvalSettings({ ...evalSettings, day1_an_type: e.target.value })}
+                          onChange={(e) => setEvalSettings({ ...evalSettings, day1_an_type: e.target.value, day1_fn_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
                           className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
                         >
                           <option value="Prototype">Prototype Evaluation</option>
@@ -1187,7 +1231,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     <h4 className="text-sm font-bold text-white mb-2">Day 2 (1st September)</h4>
                     <div className="space-y-3">
                       <div>
-                        <label className="block text-xs text-gray-300 mb-1">Morning (FN Session)</label>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-xs text-gray-300">Batch 3 (FN Morning)</label>
+                          <span className="text-[10px] text-gray-400 font-mono">09:30 AM</span>
+                        </div>
                         <select 
                           value={evalSettings?.day2_fn_type || 'Prototype'} 
                           onChange={(e) => setEvalSettings({ ...evalSettings, day2_fn_type: e.target.value, day2_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
@@ -1198,10 +1245,13 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs text-gray-300 mb-1">Afternoon (AN Session)</label>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-xs text-gray-300">Batch 4 (AN Afternoon)</label>
+                          <span className="text-[10px] text-gray-400 font-mono">01:30 PM</span>
+                        </div>
                         <select 
                           value={evalSettings?.day2_an_type || 'PPT'} 
-                          onChange={(e) => setEvalSettings({ ...evalSettings, day2_an_type: e.target.value })}
+                          onChange={(e) => setEvalSettings({ ...evalSettings, day2_an_type: e.target.value, day2_fn_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
                           className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
                         >
                           <option value="PPT">PPT Presentation</option>
@@ -1216,7 +1266,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     <h4 className="text-sm font-bold text-white mb-2">Day 3 (2nd September)</h4>
                     <div className="space-y-3">
                       <div>
-                        <label className="block text-xs text-gray-300 mb-1">Morning (FN Session)</label>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-xs text-gray-300">Batch 5 (FN Morning)</label>
+                          <span className="text-[10px] text-gray-400 font-mono">09:30 AM</span>
+                        </div>
                         <select 
                           value={evalSettings?.day3_fn_type || 'PPT'} 
                           onChange={(e) => setEvalSettings({ ...evalSettings, day3_fn_type: e.target.value, day3_an_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
@@ -1227,10 +1280,13 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs text-gray-300 mb-1">Afternoon (AN Session)</label>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-xs text-gray-300">Batch 6 (AN Afternoon)</label>
+                          <span className="text-[10px] text-gray-400 font-mono">01:30 PM</span>
+                        </div>
                         <select 
                           value={evalSettings?.day3_an_type || 'Prototype'} 
-                          onChange={(e) => setEvalSettings({ ...evalSettings, day3_an_type: e.target.value })}
+                          onChange={(e) => setEvalSettings({ ...evalSettings, day3_an_type: e.target.value, day3_fn_type: e.target.value === 'PPT' ? 'Prototype' : 'PPT' })}
                           className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
                         >
                           <option value="Prototype">Prototype Evaluation</option>
@@ -1285,7 +1341,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                   <div className="flex justify-between items-center mb-4">
                     <h3 className="font-bold text-white flex items-center gap-2"><Plus size={18}/> {editingPSId ? `Edit Statement: ${editingPSId}` : 'Add New Statement'}</h3>
                     {editingPSId && (
-                      <button onClick={() => { setEditingPSId(null); setNewPS({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, presentation_day: '', session: 'FN', session_type: 'PPT', room_number: '' }); }} className="text-xs text-red-400 hover:text-red-300 underline">Cancel Edit</button>
+                      <button onClick={() => { setEditingPSId(null); setNewPS({ id: '', title: '', sponsor: '', description: '', categories: '', max_teams: 17, batch: '', presentation_day: '', session: 'FN', session_type: 'PPT', room_number: '' }); }} className="text-xs text-red-400 hover:text-red-300 underline">Cancel Edit</button>
                     )}
                   </div>
                   <form onSubmit={handleAddPS} className="space-y-4">
@@ -1311,52 +1367,53 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                       <label className="block text-xs font-medium text-gray-300 mb-1">Categories (comma separated)</label>
                       <input type="text" value={newPS.categories} onChange={e=>setNewPS({...newPS, categories: e.target.value})} placeholder="e.g. AI/ML, Healthcare" className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/40 text-white" />
                     </div>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-xs font-medium text-gray-300 mb-1">Presentation Day</label>
+                        <label className="block text-xs font-medium text-gray-300 mb-1">Assign to Batch</label>
                         <select 
-                          value={newPS.presentation_day} 
-                          onChange={e => setNewPS({...newPS, presentation_day: e.target.value})} 
-                          className="w-full text-xs py-2 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                          value={newPS.batch || (newPS.presentation_day ? getBatchFromDaySession(newPS.presentation_day, newPS.session || 'FN') : '')} 
+                          onChange={e => {
+                            const selectedBatch = e.target.value;
+                            let day = '';
+                            let sess = 'FN';
+                            if (selectedBatch.startsWith('Day 1')) {
+                              day = '31st August';
+                              sess = selectedBatch.includes('AN') ? 'AN' : 'FN';
+                            } else if (selectedBatch.startsWith('Day 2')) {
+                              day = '1st September';
+                              sess = selectedBatch.includes('AN') ? 'AN' : 'FN';
+                            } else if (selectedBatch.startsWith('Day 3')) {
+                              day = '2nd September';
+                              sess = selectedBatch.includes('AN') ? 'AN' : 'FN';
+                            }
+                            setNewPS({
+                              ...newPS,
+                              batch: selectedBatch,
+                              presentation_day: day,
+                              session: sess
+                            });
+                          }} 
+                          className="w-full text-xs py-2 px-3 border border-white/20 rounded-lg bg-black/40 text-white"
                         >
-                          <option value="">Select Day</option>
-                          <option value="31st August">31st August</option>
-                          <option value="1st September">1st September</option>
-                          <option value="2nd September">2nd September</option>
+                          <option value="">Select Batch (Optional)</option>
+                          <option value="Day 1 - FN">Batch 1: Day 1 - FN (31st Aug Morning)</option>
+                          <option value="Day 1 - AN">Batch 2: Day 1 - AN (31st Aug Afternoon)</option>
+                          <option value="Day 2 - FN">Batch 3: Day 2 - FN (1st Sept Morning)</option>
+                          <option value="Day 2 - AN">Batch 4: Day 2 - AN (1st Sept Afternoon)</option>
+                          <option value="Day 3 - FN">Batch 5: Day 3 - FN (2nd Sept Morning)</option>
+                          <option value="Day 3 - AN">Batch 6: Day 3 - AN (2nd Sept Afternoon)</option>
                         </select>
                       </div>
                       <div>
-                        <label className="block text-xs font-medium text-gray-300 mb-1">Session</label>
-                        <select 
-                          value={newPS.session || 'FN'} 
-                          onChange={e => setNewPS({...newPS, session: e.target.value})} 
-                          className="w-full text-xs py-2 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
-                        >
-                          <option value="FN">FN (Morning)</option>
-                          <option value="AN">AN (Afternoon)</option>
-                        </select>
+                        <label className="block text-xs font-medium text-gray-300 mb-1">Room Number(s)</label>
+                        <input 
+                          type="text" 
+                          placeholder="e.g. C-002, D-013" 
+                          value={newPS.room_number} 
+                          onChange={e => setNewPS({...newPS, room_number: e.target.value})} 
+                          className="w-full text-xs py-2 px-3 border border-white/20 rounded-lg bg-black/40 text-white placeholder-gray-500" 
+                        />
                       </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-300 mb-1">Type</label>
-                        <select 
-                          value={newPS.session_type || 'PPT'} 
-                          onChange={e => setNewPS({...newPS, session_type: e.target.value})} 
-                          className="w-full text-xs py-2 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
-                        >
-                          <option value="PPT">PPT</option>
-                          <option value="Prototype">Prototype</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-gray-300 mb-1">Room Number</label>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. Room 201, Lab 3" 
-                        value={newPS.room_number} 
-                        onChange={e => setNewPS({...newPS, room_number: e.target.value})} 
-                        className="w-full text-sm py-2 px-3 border border-white/20 rounded-lg bg-black/40 text-white placeholder-gray-500" 
-                      />
                     </div>
                     <button type="submit" className="w-full bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 py-2 rounded-lg text-sm font-medium transition-all">Save Statement</button>
                   </form>
@@ -1369,26 +1426,29 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                   </div>
                   <div className="overflow-y-auto p-0 flex-grow max-h-[420px]">
                     <ul className="divide-y divide-white/5">
-                      {problemStatements.map(ps => (
-                        <li key={ps.id} className="p-4 flex items-center justify-between hover:bg-white/5 border-b border-white/5 last:border-0">
-                          <div>
-                            <p className="font-bold text-sm text-white">{ps.id}: <span className="font-normal text-gray-300">{ps.title.substring(0,25)}...</span></p>
-                            <div className="flex flex-wrap items-center gap-2 text-xs mt-1">
-                              <span className="text-gray-400">Teams: {ps.current_teams} / {ps.max_teams}</span>
-                              <span className="text-gray-300">• Day: {ps.presentation_day || 'Not Set'} ({ps.session || 'FN'})</span>
-                              <span className="text-gray-300">• Room: {ps.room_number || 'Not Set'}</span>
+                      {problemStatements.map(ps => {
+                        const psBatch = ps.batch || (ps.presentation_day ? getBatchFromDaySession(ps.presentation_day, ps.session || 'FN') : 'Not Assigned');
+                        return (
+                          <li key={ps.id} className="p-4 flex items-center justify-between hover:bg-white/5 border-b border-white/5 last:border-0">
+                            <div>
+                              <p className="font-bold text-sm text-white">{ps.id}: <span className="font-normal text-gray-300">{ps.title.substring(0,25)}...</span></p>
+                              <div className="flex flex-wrap items-center gap-2 text-xs mt-1">
+                                <span className="text-gray-400">Teams: {ps.current_teams} / {ps.max_teams}</span>
+                                <span className="text-gray-300">• {psBatch}</span>
+                                <span className="text-gray-300">• Room: {ps.room_number || 'Not Set'}</span>
+                              </div>
                             </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => openEditModal(ps)} className="p-2 text-gray-400 hover:text-white transition-colors bg-black/40 border border-white/10 rounded hover:bg-white/10" title="Edit Statement">
-                              <Edit2 size={14} />
-                            </button>
-                            <button onClick={() => openDeleteModal(ps)} className="p-2 text-gray-400 hover:text-red-400 transition-colors bg-black/40 border border-white/10 rounded hover:bg-white/10" title="Delete Statement">
-                              <Trash2 size={14} />
-                            </button>
-                          </div>
-                        </li>
-                      ))}
+                            <div className="flex items-center gap-2">
+                              <button onClick={() => openEditModal(ps)} className="p-2 text-gray-400 hover:text-white transition-colors bg-black/40 border border-white/10 rounded hover:bg-white/10" title="Edit Statement">
+                                <Edit2 size={14} />
+                              </button>
+                              <button onClick={() => openDeleteModal(ps)} className="p-2 text-gray-400 hover:text-red-400 transition-colors bg-black/40 border border-white/10 rounded hover:bg-white/10" title="Delete Statement">
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </li>
+                        );
+                      })}
                     </ul>
                   </div>
                 </div>
@@ -1758,43 +1818,48 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 <div className="flex justify-between items-center">
                   <h5 className="text-xs font-bold text-gray-300 uppercase tracking-wider">Presentation Slot & Batch</h5>
                   <span className="text-xs font-mono font-bold bg-white/10 text-white border border-white/10 px-2 py-0.5 rounded">
-                    {getBatchFromDaySession(slotDay, slotSession)} • {slotSessionType}
+                    {slotBatch || getBatchFromDaySession(slotDay, slotSession)} • {slotSessionType}
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1 font-medium">Day</label>
+                    <label className="block text-[11px] text-gray-400 mb-1 font-medium">Assign Batch</label>
                     <select
-                      value={slotDay}
-                      onChange={(e) => setSlotDay(e.target.value)}
+                      value={slotBatch || getBatchFromDaySession(slotDay, slotSession)}
+                      onChange={(e) => {
+                        const selBatch = e.target.value;
+                        setSlotBatch(selBatch);
+                        if (selBatch.startsWith('Day 1')) {
+                          setSlotDay('31st August');
+                          setSlotSession(selBatch.includes('AN') ? 'AN' : 'FN');
+                        } else if (selBatch.startsWith('Day 2')) {
+                          setSlotDay('1st September');
+                          setSlotSession(selBatch.includes('AN') ? 'AN' : 'FN');
+                        } else if (selBatch.startsWith('Day 3')) {
+                          setSlotDay('2nd September');
+                          setSlotSession(selBatch.includes('AN') ? 'AN' : 'FN');
+                        }
+                      }}
                       className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
                     >
-                      <option value="31st August">31st August (Day 1)</option>
-                      <option value="1st September">1st September (Day 2)</option>
-                      <option value="2nd September">2nd September (Day 3)</option>
+                      <option value="Day 1 - FN">Batch 1: Day 1 - FN (31st Aug Morning)</option>
+                      <option value="Day 1 - AN">Batch 2: Day 1 - AN (31st Aug Afternoon)</option>
+                      <option value="Day 2 - FN">Batch 3: Day 2 - FN (1st Sept Morning)</option>
+                      <option value="Day 2 - AN">Batch 4: Day 2 - AN (1st Sept Afternoon)</option>
+                      <option value="Day 3 - FN">Batch 5: Day 3 - FN (2nd Sept Morning)</option>
+                      <option value="Day 3 - AN">Batch 6: Day 3 - AN (2nd Sept Afternoon)</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block text-[11px] text-gray-400 mb-1 font-medium">Session</label>
-                    <select
-                      value={slotSession}
-                      onChange={(e) => setSlotSession(e.target.value)}
-                      className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
-                    >
-                      <option value="FN">FN (Morning)</option>
-                      <option value="AN">AN (Afternoon)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[11px] text-gray-400 mb-1 font-medium">Type</label>
+                    <label className="block text-[11px] text-gray-400 mb-1 font-medium">Session Mode</label>
                     <select
                       value={slotSessionType}
                       onChange={(e) => setSlotSessionType(e.target.value)}
                       className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
                     >
-                      <option value="PPT">PPT</option>
-                      <option value="Prototype">Prototype</option>
+                      <option value="PPT">PPT Presentation</option>
+                      <option value="Prototype">Prototype Evaluation</option>
                     </select>
                   </div>
                 </div>
@@ -1805,12 +1870,25 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     onClick={async () => {
                       setSavingSlot(true);
                       try {
-                        const computedBatch = getBatchFromDaySession(slotDay, slotSession);
+                        const targetBatch = slotBatch || getBatchFromDaySession(slotDay, slotSession);
+                        let targetDay = slotDay;
+                        let targetSession = slotSession;
+                        if (targetBatch.startsWith('Day 1')) {
+                          targetDay = '31st August';
+                          targetSession = targetBatch.includes('AN') ? 'AN' : 'FN';
+                        } else if (targetBatch.startsWith('Day 2')) {
+                          targetDay = '1st September';
+                          targetSession = targetBatch.includes('AN') ? 'AN' : 'FN';
+                        } else if (targetBatch.startsWith('Day 3')) {
+                          targetDay = '2nd September';
+                          targetSession = targetBatch.includes('AN') ? 'AN' : 'FN';
+                        }
+
                         const { error } = await supabase.from('teams').update({
-                          presentation_day: slotDay,
-                          session: slotSession,
+                          presentation_day: targetDay,
+                          session: targetSession,
                           session_type: slotSessionType,
-                          batch: computedBatch
+                          batch: targetBatch
                         }).eq('id', selectedTeam.id);
 
                         if (error) {
@@ -1819,17 +1897,17 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                           alert("Presentation slot updated successfully!");
                           setTeams(teams.map(t => t.id === selectedTeam.id ? {
                             ...t,
-                            presentation_day: slotDay,
-                            session: slotSession,
+                            presentation_day: targetDay,
+                            session: targetSession,
                             session_type: slotSessionType,
-                            batch: computedBatch
+                            batch: targetBatch
                           } : t));
                           setSelectedTeam({
                             ...selectedTeam,
-                            presentation_day: slotDay,
-                            session: slotSession,
+                            presentation_day: targetDay,
+                            session: targetSession,
                             session_type: slotSessionType,
-                            batch: computedBatch
+                            batch: targetBatch
                           });
                         }
                       } catch (err: any) {
@@ -1840,7 +1918,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     }}
                     className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 text-xs font-semibold py-1.5 px-4 rounded-lg transition-all"
                   >
-                    {savingSlot ? 'Saving Slot...' : 'Save Presentation Slot'}
+                    {savingSlot ? 'Saving Batch...' : 'Save Presentation Batch'}
                   </button>
                 </div>
               </div>
