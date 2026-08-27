@@ -2,7 +2,7 @@
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Download, Users, Settings, Database, Filter, X, Trash2, Plus, Edit2, LayoutDashboard, Clock } from 'lucide-react';
+import { Upload, Download, Users, Settings, Database, Filter, X, Trash2, Plus, Edit2, LayoutDashboard, Clock, Trophy, Award, Search, Medal } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -12,11 +12,17 @@ interface AdminDashboardProps {
 }
 
 export default function AdminDashboard({ session }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'upload' | 'settings' | 'evaluations' | 'certificates' | 'logistics'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'upload' | 'settings' | 'evaluations' | 'leaderboard' | 'certificates' | 'logistics'>('dashboard');
 
   const [uploadStatus, setUploadStatus] = useState<string>('');
   const [teams, setTeams] = useState<any[]>([]);
   const [metrics, setMetrics] = useState({ total: 0, allocated: 0, popular: '-' });
+
+  // Leaderboard Filter States
+  const [leaderboardPS, setLeaderboardPS] = useState('All');
+  const [leaderboardDept, setLeaderboardDept] = useState('All');
+  const [leaderboardYear, setLeaderboardYear] = useState('All');
+  const [leaderboardSearch, setLeaderboardSearch] = useState('');
 
   // Evaluation States
   const [evalSettings, setEvalSettings] = useState<any>({ categories: [{ id: 'cat1', name: 'Innovation' }, { id: 'cat2', name: 'Feasibility' }, { id: 'cat3', name: 'Presentation' }, { id: 'cat4', name: 'Technicality' }], maxMarks: 100 });
@@ -51,8 +57,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
   const getDayNormalized = (dayStr?: string) => {
     if (!dayStr) return '31st August';
-    if (dayStr.includes('1st') || dayStr.includes('Day 2')) return '1st September';
-    if (dayStr.includes('2nd') || dayStr.includes('Day 3')) return '2nd September';
+    const s = String(dayStr).trim();
+    if (s.includes('31st') || s.includes('Day 1') || s.includes('August') || s.includes('Aug') || s.includes('31')) return '31st August';
+    if (s.includes('1st') || s.includes('Day 2') || s.includes('Sept 1') || s.includes('September 1')) return '1st September';
+    if (s.includes('2nd') || s.includes('Day 3') || s.includes('Sept 2') || s.includes('September 2')) return '2nd September';
     return '31st August';
   };
 
@@ -392,83 +400,183 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const [selectedExportPS, setSelectedExportPS] = useState('ALL');
 
   const handleExportEvaluationsByPS = (targetPS: string = selectedExportPS) => {
-    const exportData: any[] = [];
-    const targetStatements = targetPS === 'ALL' 
-      ? problemStatements 
-      : problemStatements.filter(ps => ps.id === targetPS);
+    const activeTeams = teams.filter(t => t.allocated_ps_id && !t.is_disabled);
+    
+    const filteredTeams = targetPS === 'ALL' 
+      ? activeTeams 
+      : activeTeams.filter(t => t.allocated_ps_id === targetPS);
 
-    if (targetStatements.length === 0) {
-      alert("No matching Problem Statements found to export.");
+    if (filteredTeams.length === 0) {
+      alert("No active teams found for the selected problem statement.");
       return;
     }
-    
-    targetStatements.forEach((ps) => {
-      const allocatedTeams = teams.filter(t => t.allocated_ps_id === ps.id && !t.is_disabled);
-      
-      if (allocatedTeams.length === 0) {
-        exportData.push({
-          'Problem Statement ID': ps.id,
-          'Problem Statement Title': ps.title,
-          'Presentation Day': ps.presentation_day || '-',
-          'Room Number': ps.room_number || '-',
-          'Team Name': 'No Active Teams Allocated',
-          'Batch': '-',
-          'Session': '-',
-          'Session Type': '-',
-          'TL Name': '-',
-          'TL Email': '-',
-          'TL Mobile': '-',
-          'Department': '-',
-          'Year': '-',
-          'Team Members': '-',
-          [getCategoryName(0)]: '-',
-          [getCategoryName(1)]: '-',
-          [getCategoryName(2)]: '-',
-          [getCategoryName(3)]: '-',
-          'Total Score': '-',
-          'Evaluation Status': 'N/A',
-          'Evaluated By': '-'
-        });
-      } else {
-        allocatedTeams.forEach((t) => {
-          const evalData = evaluations.find(e => e.team_id === t.id);
-          const slot = getTeamSlotInfo(t);
-          exportData.push({
-            'Problem Statement ID': ps.id,
-            'Problem Statement Title': ps.title,
-            'Presentation Day': slot.day,
-            'Room Number': slot.roomNumber,
-            'Team Name': t.team_name,
-            'Batch': slot.batch,
-            'Session': slot.session,
-            'Session Type': slot.sessionType,
-            'TL Name': t.tl_name || '-',
-            'TL Email': t.tl_email,
-            'TL Mobile': t.tl_mobile || '-',
-            'Department': t.tl_department || '-',
-            'Year': t.tl_year || '-',
-            'Team Members': (t.members || []).join(', ') || '-',
-            [getCategoryName(0)]: evalData ? evalData.cat1_score : '-',
-            [getCategoryName(1)]: evalData ? evalData.cat2_score : '-',
-            [getCategoryName(2)]: evalData ? evalData.cat3_score : '-',
-            [getCategoryName(3)]: evalData ? evalData.cat4_score : '-',
-            'Total Score': evalData ? evalData.total_score : '-',
-            'Evaluation Status': evalData ? 'Evaluated' : 'Pending',
-            'Evaluated By': evalData ? evalData.evaluated_by : '-'
-          });
-        });
-      }
+
+    filteredTeams.sort((a, b) => {
+      const slotA = getTeamSlotInfo(a);
+      const slotB = getTeamSlotInfo(b);
+      if (slotA.batch !== slotB.batch) return slotA.batch.localeCompare(slotB.batch);
+      return a.team_name.localeCompare(b.team_name);
     });
+
+    const pptRows: any[] = [];
+    const protoRows: any[] = [];
+
+    filteredTeams.forEach((t, index) => {
+      const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
+      const evalData = evaluations.find(e => e.team_id === t.id);
+      const slot = getTeamSlotInfo(t);
+
+      const norm = getDayNormalized(slot.day);
+      let dayFnType = evalSettings?.day1_fn_type || 'PPT';
+      if (norm === '1st September') {
+        dayFnType = evalSettings?.day2_fn_type || 'Prototype';
+      } else if (norm === '2nd September') {
+        dayFnType = evalSettings?.day3_fn_type || 'PPT';
+      }
+
+      const pptSession = dayFnType === 'PPT' ? 'Morning (FN) - 09:30 AM' : 'Afternoon (AN) - 01:30 PM';
+      const protoSession = dayFnType === 'Prototype' ? 'Morning (FN) - 09:30 AM' : 'Afternoon (AN) - 01:30 PM';
+
+      const baseTeamData = {
+        'Room Number': slot.roomNumber,
+        'Team Name': t.team_name,
+        'TL Name': t.tl_name || '-',
+        'TL Email': t.tl_email,
+        'TL Mobile': t.tl_mobile || '-',
+        'Department': t.tl_department || '-',
+        'Year': t.tl_year || '-',
+        'Problem Statement ID': ps?.id || '-',
+        'Problem Statement Title': ps?.title || '-',
+        'Team Members': (t.members || []).join(', ') || '-',
+        [getCategoryName(0)]: evalData ? evalData.cat1_score : '-',
+        [getCategoryName(1)]: evalData ? evalData.cat2_score : '-',
+        [getCategoryName(2)]: evalData ? evalData.cat3_score : '-',
+        [getCategoryName(3)]: evalData ? evalData.cat4_score : '-',
+        'Total Score': evalData ? evalData.total_score : '-',
+        'Evaluation Status': evalData ? 'Evaluated' : 'Pending',
+        'Evaluated By': evalData ? evalData.evaluated_by : '-'
+      };
+
+      pptRows.push({
+        'Sl No': index + 1,
+        'Batch': slot.batch,
+        'Presentation Day': slot.day,
+        'Session': pptSession,
+        'Evaluation Round': 'PPT Presentation',
+        ...baseTeamData
+      });
+
+      protoRows.push({
+        'Sl No': index + 1,
+        'Batch': slot.batch,
+        'Presentation Day': slot.day,
+        'Session': protoSession,
+        'Evaluation Round': 'Prototype Evaluation',
+        ...baseTeamData
+      });
+    });
+
+    const workbook = XLSX.utils.book_new();
+    const title = targetPS === 'ALL' ? 'ALL PROBLEM STATEMENTS' : targetPS;
+
+    const worksheet = XLSX.utils.aoa_to_sheet([
+      [`CODE STORM 2026 - ${title} - PPT PRESENTATIONS TABLE`],
+      [`Generated on: ${new Date().toLocaleString()}`],
+      []
+    ]);
+
+    XLSX.utils.sheet_add_json(worksheet, pptRows, { origin: 'A4' });
+
+    const protoStartRow = pptRows.length + 7;
+    XLSX.utils.sheet_add_aoa(worksheet, [
+      [],
+      [`CODE STORM 2026 - ${title} - PROTOTYPE EVALUATIONS TABLE`],
+      [`Generated on: ${new Date().toLocaleString()}`],
+      []
+    ], { origin: `A${protoStartRow}` });
+
+    XLSX.utils.sheet_add_json(worksheet, protoRows, { origin: `A${protoStartRow + 4}` });
 
     const filename = targetPS === 'ALL' 
       ? 'CodeStorm_Evaluations_All_Problem_Statements.xlsx' 
       : `CodeStorm_Evaluations_${targetPS}.xlsx`;
     const sheetName = targetPS === 'ALL' ? 'All_PS_Evaluations' : targetPS.replace(/[:\\/?*\[\]]/g, '_');
 
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
     XLSX.writeFile(workbook, filename);
+  };
+
+  const handleExportLeaderboard = () => {
+    const activeTeams = teams.filter(t => t.allocated_ps_id && !t.is_disabled);
+    
+    const ranked = activeTeams
+      .map(t => {
+        const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
+        const evalData = evaluations.find(e => e.team_id === t.id);
+        const slot = getTeamSlotInfo(t);
+        const totalScore = evalData ? Number(evalData.total_score) : null;
+        return {
+          team: t,
+          ps,
+          evalData,
+          slot,
+          totalScore,
+          isEvaluated: evalData !== undefined
+        };
+      })
+      .filter(item => {
+        if (leaderboardPS !== 'All' && item.ps?.id !== leaderboardPS) return false;
+        if (leaderboardDept !== 'All' && item.team.tl_department !== leaderboardDept) return false;
+        if (leaderboardYear !== 'All' && item.team.tl_year !== leaderboardYear) return false;
+        if (leaderboardSearch) {
+          const query = leaderboardSearch.toLowerCase();
+          const matchesName = item.team.team_name.toLowerCase().includes(query);
+          const matchesTL = (item.team.tl_name || '').toLowerCase().includes(query);
+          const matchesPS = (item.ps?.id || '').toLowerCase().includes(query);
+          if (!matchesName && !matchesTL && !matchesPS) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const scoreA = a.totalScore ?? -1;
+        const scoreB = b.totalScore ?? -1;
+        if (scoreB !== scoreA) return scoreB - scoreA;
+        return a.team.team_name.localeCompare(b.team.team_name);
+      });
+
+    if (ranked.length === 0) {
+      alert("No teams match the selected leaderboard filters.");
+      return;
+    }
+
+    const exportData = ranked.map((item, index) => ({
+      'Rank': item.totalScore !== null ? index + 1 : '-',
+      'Team Name': item.team.team_name,
+      'Total Score': item.totalScore !== null ? item.totalScore : '-',
+      [getCategoryName(0)]: item.evalData ? item.evalData.cat1_score : '-',
+      [getCategoryName(1)]: item.evalData ? item.evalData.cat2_score : '-',
+      [getCategoryName(2)]: item.evalData ? item.evalData.cat3_score : '-',
+      [getCategoryName(3)]: item.evalData ? item.evalData.cat4_score : '-',
+      'Problem Statement ID': item.ps?.id || '-',
+      'Problem Statement Title': item.ps?.title || '-',
+      'Department': item.team.tl_department || '-',
+      'Year': item.team.tl_year || '-',
+      'Batch': item.slot.batch,
+      'Presentation Day': item.slot.day,
+      'Session': item.slot.session,
+      'Room Number': item.slot.roomNumber,
+      'TL Name': item.team.tl_name || '-',
+      'TL Email': item.team.tl_email,
+      'TL Mobile': item.team.tl_mobile || '-',
+      'Team Members': (item.team.members || []).join(', ') || '-',
+      'Evaluation Status': item.isEvaluated ? 'Evaluated' : 'Pending',
+      'Evaluated By': item.evalData ? item.evalData.evaluated_by : '-'
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Leaderboard");
+    XLSX.writeFile(workbook, `CodeStorm_Leaderboard_${leaderboardPS}_${leaderboardDept}_${leaderboardYear}.xlsx`.replace(/ /g, '_'));
   };
 
   const [selectedExportBatch, setSelectedExportBatch] = useState('ALL');
@@ -958,6 +1066,12 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${activeTab === 'evaluations' ? 'bg-white/10 text-white shadow-sm border border-white/10' : 'text-gray-400 hover:text-white'}`}
               >
                 Evaluations
+              </button>
+              <button 
+                onClick={() => setActiveTab('leaderboard')}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'leaderboard' ? 'bg-white/10 text-white shadow-sm border border-white/10' : 'text-gray-400 hover:text-white'}`}
+              >
+                <Trophy size={16} className="text-amber-400" /> Leaderboard
               </button>
             </div>
             
@@ -2249,7 +2363,282 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
               </div>
             </motion.div>
           )}
-</AnimatePresence>
+
+          {activeTab === 'leaderboard' && (() => {
+            const activeTeams = teams.filter(t => t.allocated_ps_id && !t.is_disabled);
+            
+            const ranked = activeTeams
+              .map(t => {
+                const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
+                const evalData = evaluations.find(e => e.team_id === t.id);
+                const slot = getTeamSlotInfo(t);
+                const totalScore = evalData ? Number(evalData.total_score) : null;
+                return {
+                  team: t,
+                  ps,
+                  evalData,
+                  slot,
+                  totalScore,
+                  isEvaluated: evalData !== undefined
+                };
+              })
+              .filter(item => {
+                if (leaderboardPS !== 'All' && item.ps?.id !== leaderboardPS) return false;
+                if (leaderboardDept !== 'All' && item.team.tl_department !== leaderboardDept) return false;
+                if (leaderboardYear !== 'All' && item.team.tl_year !== leaderboardYear) return false;
+                if (leaderboardSearch) {
+                  const query = leaderboardSearch.toLowerCase();
+                  const matchesName = item.team.team_name.toLowerCase().includes(query);
+                  const matchesTL = (item.team.tl_name || '').toLowerCase().includes(query);
+                  const matchesPS = (item.ps?.id || '').toLowerCase().includes(query);
+                  if (!matchesName && !matchesTL && !matchesPS) return false;
+                }
+                return true;
+              })
+              .sort((a, b) => {
+                const scoreA = a.totalScore ?? -1;
+                const scoreB = b.totalScore ?? -1;
+                if (scoreB !== scoreA) return scoreB - scoreA;
+                return a.team.team_name.localeCompare(b.team.team_name);
+              });
+
+            const availableDepts = ['All', ...Array.from(new Set(teams.map(t => t.tl_department).filter(Boolean))).sort()];
+            const availableYears = ['All', ...Array.from(new Set(teams.map(t => t.tl_year).filter(Boolean))).sort()];
+            const availablePSList = ['All', ...Array.from(new Set(teams.map(t => t.allocated_ps_id).filter(Boolean))).sort()];
+
+            const top3 = ranked.filter(r => r.totalScore !== null).slice(0, 3);
+
+            return (
+              <motion.div
+                key="leaderboard"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                transition={{ duration: 0.3, ease: "circOut" }}
+                className="space-y-8"
+              >
+                {/* Header & Export */}
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                      <Trophy className="text-amber-400" size={28} /> Evaluation Leaderboard
+                    </h2>
+                    <p className="text-sm text-gray-400 mt-1">
+                      Live ranked standings of evaluated teams with filters for problem statements, departments, and academic years.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleExportLeaderboard}
+                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-5 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all shadow-sm"
+                  >
+                    <Download size={16} /> Export Leaderboard
+                  </button>
+                </div>
+
+                {/* Top 3 Podium Cards */}
+                {top3.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {top3.map((item, idx) => {
+                      const rank = idx + 1;
+                      const badgeBorder = rank === 1 ? 'border-amber-400/50 bg-amber-500/10' : rank === 2 ? 'border-gray-300/50 bg-gray-400/10' : 'border-amber-700/50 bg-amber-800/10';
+                      const medalColor = rank === 1 ? 'text-amber-300' : rank === 2 ? 'text-gray-100' : 'text-amber-500';
+                      const medalTitle = rank === 1 ? '1st Place 🥇' : rank === 2 ? '2nd Place 🥈' : '3rd Place 🥉';
+
+                      return (
+                        <div key={item.team.id} className={`card border ${badgeBorder} relative overflow-hidden p-6 space-y-4`}>
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <span className={`text-xs font-mono font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${badgeBorder} ${medalColor}`}>
+                                {medalTitle}
+                              </span>
+                              <h4 className="text-xl font-bold text-white mt-2">{item.team.team_name}</h4>
+                              <p className="text-xs text-gray-300 mt-0.5">{item.ps?.id} • {item.team.tl_name}</p>
+                            </div>
+                            <div className="text-right">
+                              <span className="text-3xl font-black text-white font-mono">{item.totalScore}</span>
+                              <span className="text-xs text-gray-400 block">/ 100</span>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-xs pt-3 border-t border-white/10 text-gray-300 font-mono">
+                            <div>Dept: <strong className="text-white">{item.team.tl_department || 'N/A'}</strong></div>
+                            <div>Year: <strong className="text-white">{item.team.tl_year || 'N/A'}</strong></div>
+                            <div>Slot: <strong className="text-white">{item.slot.badgeLabel}</strong></div>
+                            <div>Room: <strong className="text-white">{item.slot.roomNumber}</strong></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Filters & Leaderboard Table */}
+                <div className="card">
+                  <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-4 mb-6">
+                    <div className="flex flex-wrap items-center gap-4">
+                      <div className="flex items-center gap-2 text-sm font-medium text-gray-300">
+                        <Filter size={16} /> Filters:
+                      </div>
+
+                      {/* Problem Statement Filter */}
+                      <div className="flex flex-col">
+                        <label className="text-xs text-gray-300 mb-1">Problem Statement</label>
+                        <select
+                          value={leaderboardPS}
+                          onChange={(e) => setLeaderboardPS(e.target.value)}
+                          className="text-sm border-white/20 rounded-md bg-black/40 backdrop-blur-xl border py-1.5 px-3 focus:ring-white/30 text-white min-w-[150px]"
+                        >
+                          {availablePSList.map(ps => (
+                            <option key={ps} value={ps}>{ps === 'All' ? 'All Statements' : ps}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Department Filter */}
+                      <div className="flex flex-col">
+                        <label className="text-xs text-gray-300 mb-1">Department</label>
+                        <select
+                          value={leaderboardDept}
+                          onChange={(e) => setLeaderboardDept(e.target.value)}
+                          className="text-sm border-white/20 rounded-md bg-black/40 backdrop-blur-xl border py-1.5 px-3 focus:ring-white/30 text-white min-w-[130px]"
+                        >
+                          {availableDepts.map(d => (
+                            <option key={d} value={d}>{d === 'All' ? 'All Departments' : d}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Year Filter */}
+                      <div className="flex flex-col">
+                        <label className="text-xs text-gray-300 mb-1">Academic Year</label>
+                        <select
+                          value={leaderboardYear}
+                          onChange={(e) => setLeaderboardYear(e.target.value)}
+                          className="text-sm border-white/20 rounded-md bg-black/40 backdrop-blur-xl border py-1.5 px-3 focus:ring-white/30 text-white min-w-[120px]"
+                        >
+                          {availableYears.map(y => (
+                            <option key={y} value={y}>{y === 'All' ? 'All Years' : y}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Search Bar */}
+                    <div className="relative min-w-[240px]">
+                      <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder="Search team, TL or PS..."
+                        value={leaderboardSearch}
+                        onChange={(e) => setLeaderboardSearch(e.target.value)}
+                        className="w-full text-sm pl-9 pr-3 py-1.5 border border-white/20 rounded-md bg-black/40 text-white placeholder-gray-500 focus:border-white/30"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Ranked Table */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-white/10 text-gray-300 text-sm bg-black/20 font-semibold">
+                          <th className="p-4 w-16 text-center">Rank</th>
+                          <th className="p-4">Team Details</th>
+                          <th className="p-4">PS & Slot</th>
+                          <th className="p-4">Dept & Year</th>
+                          <th className="p-4 text-center">Breakdown (25 each)</th>
+                          <th className="p-4 text-center">Total Score</th>
+                          <th className="p-4 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ranked.map((item, index) => {
+                          const isTop1 = index === 0 && item.totalScore !== null;
+                          const isTop2 = index === 1 && item.totalScore !== null;
+                          const isTop3 = index === 2 && item.totalScore !== null;
+
+                          return (
+                            <tr key={item.team.id} className="border-b border-white/10 hover:bg-black/20 transition-colors">
+                              <td className="p-4 text-center">
+                                {isTop1 ? (
+                                  <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 text-xs font-mono">🥇 #1</span>
+                                ) : isTop2 ? (
+                                  <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-full bg-gray-400/20 text-gray-200 font-bold border border-gray-400/30 text-xs font-mono">🥈 #2</span>
+                                ) : isTop3 ? (
+                                  <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-full bg-amber-700/20 text-amber-500 font-bold border border-amber-700/30 text-xs font-mono">🥉 #3</span>
+                                ) : (
+                                  <span className="font-mono text-sm text-gray-400 font-semibold">#{index + 1}</span>
+                                )}
+                              </td>
+                              <td className="p-4 text-sm">
+                                <p className="font-bold text-white text-base">{item.team.team_name}</p>
+                                <p className="text-xs text-gray-300 mt-0.5">Leader: <span className="font-medium text-white">{item.team.tl_name}</span> ({item.team.tl_email})</p>
+                              </td>
+                              <td className="p-4 text-sm">
+                                <span className="font-bold text-white text-sm">{item.ps?.id || 'N/A'}</span>
+                                <div className="text-xs text-gray-400 mt-0.5 font-mono">
+                                  {item.slot.badgeLabel} • Room {item.slot.roomNumber}
+                                </div>
+                              </td>
+                              <td className="p-4 text-sm font-mono">
+                                <span className="text-white font-semibold">{item.team.tl_department || '-'}</span>
+                                <span className="text-gray-400 block text-xs">{item.team.tl_year || '-'}</span>
+                              </td>
+                              <td className="p-4 text-xs font-mono text-center text-gray-300">
+                                {item.evalData ? (
+                                  <div className="flex justify-center gap-2">
+                                    <span>C1: <strong>{item.evalData.cat1_score}</strong></span>
+                                    <span>C2: <strong>{item.evalData.cat2_score}</strong></span>
+                                    <span>C3: <strong>{item.evalData.cat3_score}</strong></span>
+                                    <span>C4: <strong>{item.evalData.cat4_score}</strong></span>
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-500 italic">Not Evaluated</span>
+                                )}
+                              </td>
+                              <td className="p-4 text-sm text-center">
+                                {item.totalScore !== null ? (
+                                  <span className="font-black text-green-400 text-xl font-mono">{item.totalScore}</span>
+                                ) : (
+                                  <span className="text-gray-500 font-mono">-</span>
+                                )}
+                              </td>
+                              <td className="p-4 text-sm text-right">
+                                <button
+                                  onClick={() => {
+                                    setTeamToEvaluate(item.team);
+                                    if (item.evalData) {
+                                      setEvalScores({
+                                        cat1: item.evalData.cat1_score, cat2: item.evalData.cat2_score,
+                                        cat3: item.evalData.cat3_score, cat4: item.evalData.cat4_score
+                                      });
+                                    } else {
+                                      const initScores: Record<string, number> = {}; (evalSettings?.categories || []).forEach((c: any) => initScores[c.id] = 0); setEvalScores(initScores);
+                                    }
+                                    setEvalModalOpen(true);
+                                  }}
+                                  className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-4 py-1.5 rounded-lg text-xs font-medium transition-all"
+                                >
+                                  {item.evalData ? 'Edit Marks' : 'Evaluate'}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {ranked.length === 0 && (
+                          <tr>
+                            <td colSpan={7} className="p-8 text-center text-gray-400">
+                              No teams matched the selected leaderboard filters.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })()}
+        </AnimatePresence>
       </main>
 
       {/* Team Details Modal */}
