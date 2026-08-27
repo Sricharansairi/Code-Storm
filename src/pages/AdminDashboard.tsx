@@ -225,6 +225,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
 
   const filteredEvalTeams = teams.filter(t => {
+    if (t.is_disabled) return false;
     const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
     if (!ps) return false;
     if (evalFilterDay !== 'All' && ps.presentation_day !== evalFilterDay) return false;
@@ -236,7 +237,6 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   });
 
   const handleExportEvaluations = () => {
-
     const exportData = filteredEvalTeams.map((t: any, index: number) => {
       const ps = problemStatements.find(p => p.id === t.allocated_ps_id);
       const evalData = evaluations.find(e => e.team_id === t.id);
@@ -262,6 +262,66 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Evaluations");
     XLSX.writeFile(workbook, "CodeStorm_Evaluations.xlsx");
+  };
+
+  const handleExportEvaluationsByPS = () => {
+    const exportData: any[] = [];
+    
+    problemStatements.forEach((ps) => {
+      const allocatedTeams = teams.filter(t => t.allocated_ps_id === ps.id && !t.is_disabled);
+      
+      if (allocatedTeams.length === 0) {
+        exportData.push({
+          'Problem Statement ID': ps.id,
+          'Problem Statement Title': ps.title,
+          'Presentation Day': ps.presentation_day || '-',
+          'Room Number': ps.room_number || '-',
+          'Team Name': 'No Active Teams Allocated',
+          'TL Name': '-',
+          'TL Email': '-',
+          'TL Mobile': '-',
+          'Department': '-',
+          'Year': '-',
+          'Team Members': '-',
+          [evalSettings.category_1 || 'Category 1']: '-',
+          [evalSettings.category_2 || 'Category 2']: '-',
+          [evalSettings.category_3 || 'Category 3']: '-',
+          [evalSettings.category_4 || 'Category 4']: '-',
+          'Total Score': '-',
+          'Evaluation Status': 'N/A',
+          'Evaluated By': '-'
+        });
+      } else {
+        allocatedTeams.forEach((t) => {
+          const evalData = evaluations.find(e => e.team_id === t.id);
+          exportData.push({
+            'Problem Statement ID': ps.id,
+            'Problem Statement Title': ps.title,
+            'Presentation Day': ps.presentation_day || '-',
+            'Room Number': ps.room_number || '-',
+            'Team Name': t.team_name,
+            'TL Name': t.tl_name || '-',
+            'TL Email': t.tl_email,
+            'TL Mobile': t.tl_mobile || '-',
+            'Department': t.tl_department || '-',
+            'Year': t.tl_year || '-',
+            'Team Members': (t.members || []).join(', ') || '-',
+            [evalSettings.category_1 || 'Category 1']: evalData ? evalData.cat1_score : '-',
+            [evalSettings.category_2 || 'Category 2']: evalData ? evalData.cat2_score : '-',
+            [evalSettings.category_3 || 'Category 3']: evalData ? evalData.cat3_score : '-',
+            [evalSettings.category_4 || 'Category 4']: evalData ? evalData.cat4_score : '-',
+            'Total Score': evalData ? evalData.total_score : '-',
+            'Evaluation Status': evalData ? 'Evaluated' : 'Pending',
+            'Evaluated By': evalData ? evalData.evaluated_by : '-'
+          });
+        });
+      }
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "By_Problem_Statement");
+    XLSX.writeFile(workbook, "CodeStorm_Evaluations_By_Problem_Statement.xlsx");
   };
 
 
@@ -647,9 +707,16 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                           <p className="text-xs text-gray-500">Year {team.tl_year || 'N/A'}</p>
                         </td>
                         <td className="py-3 text-sm">
-                          <span className={`badge ${!team.allocated_ps_id ? 'badge-red' : 'badge-green'}`}>
-                            {team.allocated_ps_id ? `Allocated (${team.allocated_ps_id})` : 'Pending'}
-                          </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`badge ${!team.allocated_ps_id ? 'badge-red' : 'badge-green'}`}>
+                              {team.allocated_ps_id ? `Allocated (${team.allocated_ps_id})` : 'Pending'}
+                            </span>
+                            {team.is_disabled && (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-red-500/20 text-red-400 border border-red-500/30">
+                                Disabled
+                              </span>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -779,11 +846,32 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                   </div>
                 </div>
               </div>
-<div className="card max-w-4xl mx-auto mt-6">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="p-2 bg-primary/10 text-blue-300 rounded-lg"><Settings size={20} /></div>
-                <h2 className="text-xl font-bold">Problem Statement Management</h2>
+
+              {/* Export Reports by Problem Statement */}
+              <div className="card max-w-4xl mx-auto mt-6">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
+                      <Download size={20} className="text-blue-400" /> Export Reports by Problem Statement
+                    </h3>
+                    <p className="text-xs text-gray-400">
+                      Export all team names, details, and evaluation marks grouped by each Problem Statement to an Excel sheet.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={handleExportEvaluationsByPS}
+                    className="btn-primary text-sm flex items-center gap-2 shrink-0 py-2.5 px-5"
+                  >
+                    <Download size={16} /> Export to Excel
+                  </button>
+                </div>
               </div>
+
+              <div className="card max-w-4xl mx-auto mt-6">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="p-2 bg-primary/10 text-blue-300 rounded-lg"><Settings size={20} /></div>
+                  <h2 className="text-xl font-bold">Problem Statement Management</h2>
+                </div>
               
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 {/* Add new PS form */}
@@ -1202,16 +1290,37 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
             </div>
             
             <div className="px-6 py-4 border-t border-white/10 bg-white/5/50 flex justify-between">
-              <div className="flex gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button onClick={() => { 
                   setModalType('edit-team'); 
                   setNewTeam({ team_name: selectedTeam.team_name, tl_email: selectedTeam.tl_email }); 
                   setModalOpen(true); 
                 }} className="btn-secondary text-sm">Edit</button>
+                <button 
+                  onClick={async () => {
+                    const isDisabling = !selectedTeam.is_disabled;
+                    const confirmMsg = isDisabling 
+                      ? `Are you sure you want to disable "${selectedTeam.team_name}"? They will not be able to opt for problem statements and will be hidden from evaluations.`
+                      : `Are you sure you want to re-enable "${selectedTeam.team_name}"?`;
+                    if (window.confirm(confirmMsg)) {
+                      const { error } = await supabase.from('teams').update({ is_disabled: isDisabling }).eq('id', selectedTeam.id);
+                      if (error) {
+                        alert("Error updating team: " + error.message);
+                      } else {
+                        alert(`Team successfully ${isDisabling ? 'disabled' : 'enabled'}!`);
+                        setSelectedTeam({ ...selectedTeam, is_disabled: isDisabling });
+                        fetchTeams();
+                      }
+                    }
+                  }}
+                  className={`btn-secondary text-sm ${selectedTeam.is_disabled ? 'text-green-400 border-green-500/30 hover:bg-green-500/10' : 'text-amber-400 border-amber-500/30 hover:bg-amber-500/10'}`}
+                >
+                  {selectedTeam.is_disabled ? 'Enable Team' : 'Disable Team'}
+                </button>
                 <button onClick={() => { 
                   setModalType('delete-team'); 
                   setModalOpen(true); 
-                }} className="btn-secondary text-sm text-red-600 border-red-200">Delete</button>
+                }} className="btn-secondary text-sm text-red-400 border-red-500/30 hover:bg-red-500/10">Delete</button>
               </div>
               <button onClick={() => setSelectedTeam(null)} className="btn-secondary text-sm">
                 Close

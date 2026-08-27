@@ -32,12 +32,14 @@ CREATE TABLE IF NOT EXISTS teams (
   tl_year text,
   members text[],
   allocated_ps_id text REFERENCES problem_statements(id),
-  allocation_time timestamp with time zone
+  allocation_time timestamp with time zone,
+  is_disabled boolean DEFAULT false
 );
 
 ALTER TABLE teams ADD COLUMN IF NOT EXISTS members text[];
 ALTER TABLE teams ADD COLUMN IF NOT EXISTS allocated_ps_id text REFERENCES problem_statements(id);
 ALTER TABLE teams ADD COLUMN IF NOT EXISTS allocation_time timestamp with time zone;
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS is_disabled boolean DEFAULT false;
 
 -- 3. Create / Update Admins Table
 CREATE TABLE IF NOT EXISTS admins (

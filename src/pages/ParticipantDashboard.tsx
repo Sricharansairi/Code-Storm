@@ -79,12 +79,20 @@ export default function ParticipantDashboard({ session }: DashboardProps) {
       alert("Only Registered Team Leaders can opt for a problem statement!");
       return;
     }
+    if (teamInfo.is_disabled) {
+      alert("Your team has been disabled by the administrator and cannot opt for problem statements.");
+      return;
+    }
     if (isLocked) return;
     setSelectedId(selectedId === id ? null : id);
   };
 
   const handleConfirm = async () => {
     if (!selectedId || !session) return;
+    if (teamInfo?.is_disabled) {
+      alert("Your team has been disabled by the administrator and cannot lock in problem statements.");
+      return;
+    }
 
     const isConfirmed = window.confirm("WARNING: Are you absolutely sure? Once you lock in this problem statement, your choice is final and cannot be changed!");
     if (!isConfirmed) return;
@@ -192,6 +200,19 @@ export default function ParticipantDashboard({ session }: DashboardProps) {
                 </ul>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Disabled Banner */}
+        {teamInfo?.is_disabled && (
+          <div className="card rounded-xl p-4 flex items-center gap-3 border-red-500/30 bg-red-500/10 text-red-300">
+            <span className="text-xl">⚠️</span>
+            <div>
+              <h3 className="font-semibold text-red-200">Account Disabled</h3>
+              <p className="text-sm text-red-300/90">
+                Your team has been disabled by the administrator. Problem statement selection and modifications are currently unavailable.
+              </p>
+            </div>
           </div>
         )}
 
