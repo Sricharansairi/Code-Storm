@@ -50,13 +50,40 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
   const fetchEvalData = async () => {
     try {
-      const { data: settings } = await supabase.from('evaluation_settings').select('*').single();
-      if (settings) setEvalSettings(settings);
+      const { data: settingsList } = await supabase.from('evaluation_settings').select('*').order('updated_at', { ascending: false }).limit(1);
+      const settings = settingsList?.[0];
+      if (settings) {
+        let cats = settings.categories;
+        if (!cats || !Array.isArray(cats) || cats.length === 0) {
+          cats = [
+            { id: 'cat1', name: settings.category_1 || 'Innovation' },
+            { id: 'cat2', name: settings.category_2 || 'Feasibility' },
+            { id: 'cat3', name: settings.category_3 || 'Presentation' },
+            { id: 'cat4', name: settings.category_4 || 'Technicality' }
+          ];
+        }
+        setEvalSettings({
+          ...settings,
+          categories: cats
+        });
+      }
       const { data: evals } = await supabase.from('evaluations').select('*');
       if (evals) setEvaluations(evals);
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const getCategoryName = (index: number) => {
+    if (evalSettings?.categories && Array.isArray(evalSettings.categories) && evalSettings.categories[index]?.name) {
+      return evalSettings.categories[index].name;
+    }
+    const key = `category_${index + 1}`;
+    if (evalSettings && evalSettings[key]) {
+      return evalSettings[key];
+    }
+    const defaults = ['Innovation', 'Feasibility', 'Presentation', 'Technicality'];
+    return defaults[index] || `Category ${index + 1}`;
   };
 
   useEffect(() => {
@@ -249,10 +276,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         'Problem Statement ID': t.allocated_ps_id || '-',
         'Presentation Day': ps?.presentation_day || '-',
         'Room Number': ps?.room_number || '-',
-        [evalSettings.category_1 || 'Category 1']: evalData ? evalData.cat1_score : '-',
-        [evalSettings.category_2 || 'Category 2']: evalData ? evalData.cat2_score : '-',
-        [evalSettings.category_3 || 'Category 3']: evalData ? evalData.cat3_score : '-',
-        [evalSettings.category_4 || 'Category 4']: evalData ? evalData.cat4_score : '-',
+        [getCategoryName(0)]: evalData ? evalData.cat1_score : '-',
+        [getCategoryName(1)]: evalData ? evalData.cat2_score : '-',
+        [getCategoryName(2)]: evalData ? evalData.cat3_score : '-',
+        [getCategoryName(3)]: evalData ? evalData.cat4_score : '-',
         'Total Score': evalData ? evalData.total_score : '-',
         'Updates Count': evalData ? (evalData.update_count || 0) : 0,
         'Evaluated By': evalData ? evalData.evaluated_by : '-'
@@ -283,10 +310,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
           'Department': '-',
           'Year': '-',
           'Team Members': '-',
-          [evalSettings.category_1 || 'Category 1']: '-',
-          [evalSettings.category_2 || 'Category 2']: '-',
-          [evalSettings.category_3 || 'Category 3']: '-',
-          [evalSettings.category_4 || 'Category 4']: '-',
+          [getCategoryName(0)]: '-',
+          [getCategoryName(1)]: '-',
+          [getCategoryName(2)]: '-',
+          [getCategoryName(3)]: '-',
           'Total Score': '-',
           'Evaluation Status': 'N/A',
           'Evaluated By': '-'
@@ -306,10 +333,10 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
             'Department': t.tl_department || '-',
             'Year': t.tl_year || '-',
             'Team Members': (t.members || []).join(', ') || '-',
-            [evalSettings.category_1 || 'Category 1']: evalData ? evalData.cat1_score : '-',
-            [evalSettings.category_2 || 'Category 2']: evalData ? evalData.cat2_score : '-',
-            [evalSettings.category_3 || 'Category 3']: evalData ? evalData.cat3_score : '-',
-            [evalSettings.category_4 || 'Category 4']: evalData ? evalData.cat4_score : '-',
+            [getCategoryName(0)]: evalData ? evalData.cat1_score : '-',
+            [getCategoryName(1)]: evalData ? evalData.cat2_score : '-',
+            [getCategoryName(2)]: evalData ? evalData.cat3_score : '-',
+            [getCategoryName(3)]: evalData ? evalData.cat4_score : '-',
             'Total Score': evalData ? evalData.total_score : '-',
             'Evaluation Status': evalData ? 'Evaluated' : 'Pending',
             'Evaluated By': evalData ? evalData.evaluated_by : '-'
@@ -820,17 +847,44 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     <button 
                       onClick={async () => {
                         try {
+                          const cats = evalSettings.categories || [];
+                          const payload = {
+                            categories: cats,
+                            category_1: cats[0]?.name || 'Innovation',
+                            category_2: cats[1]?.name || 'Feasibility',
+                            category_3: cats[2]?.name || 'Presentation',
+                            category_4: cats[3]?.name || 'Technicality',
+                            max_marks: evalSettings.maxMarks || 100,
+                            updated_at: new Date().toISOString()
+                          };
+
                           const { data: existing } = await supabase.from('evaluation_settings').select('id').limit(1);
                           let error;
                           if (existing && existing.length > 0) {
-                            const res = await supabase.from('evaluation_settings').update({ categories: evalSettings.categories }).eq('id', existing[0].id);
+                            const res = await supabase.from('evaluation_settings').update(payload).eq('id', existing[0].id);
                             error = res.error;
                           } else {
-                            const res = await supabase.from('evaluation_settings').insert([{ categories: evalSettings.categories }]);
+                            const res = await supabase.from('evaluation_settings').insert([payload]);
                             error = res.error;
                           }
                           if (error) {
-                            alert("Error saving settings: " + error.message);
+                            // Fallback if specific columns are not yet in Supabase
+                            const fallback = { categories: cats };
+                            if (existing && existing.length > 0) {
+                              const res2 = await supabase.from('evaluation_settings').update(fallback).eq('id', existing[0].id);
+                              if (res2.error) alert("Error saving settings: " + res2.error.message);
+                              else {
+                                alert("Evaluation Schema saved successfully!");
+                                fetchEvalData();
+                              }
+                            } else {
+                              const res2 = await supabase.from('evaluation_settings').insert([fallback]);
+                              if (res2.error) alert("Error saving settings: " + res2.error.message);
+                              else {
+                                alert("Evaluation Schema saved successfully!");
+                                fetchEvalData();
+                              }
+                            }
                           } else {
                             alert("Evaluation Schema saved successfully!");
                             fetchEvalData();
@@ -1574,22 +1628,22 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 <p className="text-sm text-gray-300 mb-2">Assign marks out of 25 for each category.</p>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
-                  <label className="text-sm font-semibold text-white">{evalSettings.categories?.[0]?.name || evalSettings.category_1 || 'Category 1'}</label>
+                  <label className="text-sm font-semibold text-white">{getCategoryName(0)}</label>
                   <input type="number" min="0" max="25" required value={evalScores.cat1 ?? 0} onChange={e => setEvalScores({...evalScores, cat1: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
                 </div>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
-                  <label className="text-sm font-semibold text-white">{evalSettings.categories?.[1]?.name || evalSettings.category_2 || 'Category 2'}</label>
+                  <label className="text-sm font-semibold text-white">{getCategoryName(1)}</label>
                   <input type="number" min="0" max="25" required value={evalScores.cat2 ?? 0} onChange={e => setEvalScores({...evalScores, cat2: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
                 </div>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
-                  <label className="text-sm font-semibold text-white">{evalSettings.categories?.[2]?.name || evalSettings.category_3 || 'Category 3'}</label>
+                  <label className="text-sm font-semibold text-white">{getCategoryName(2)}</label>
                   <input type="number" min="0" max="25" required value={evalScores.cat3 ?? 0} onChange={e => setEvalScores({...evalScores, cat3: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
                 </div>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
-                  <label className="text-sm font-semibold text-white">{evalSettings.categories?.[3]?.name || evalSettings.category_4 || 'Category 4'}</label>
+                  <label className="text-sm font-semibold text-white">{getCategoryName(3)}</label>
                   <input type="number" min="0" max="25" required value={evalScores.cat4 ?? 0} onChange={e => setEvalScores({...evalScores, cat4: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
                 </div>
                 
