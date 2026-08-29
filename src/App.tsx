@@ -4,11 +4,11 @@ import Login from './pages/Login';
 import AuthPage from './pages/AuthPage';
 import ParticipantDashboard from './pages/ParticipantDashboard';
 import AdminDashboard from './pages/AdminDashboard';
+import AllocationViewer from './pages/AllocationViewer';
+import EventDetails from './pages/EventDetails';
 import { useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
 import type { Session } from '@supabase/supabase-js';
-
-import EventDetails from './pages/EventDetails';
 
 function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -43,6 +43,8 @@ function App() {
         <Route path="/login" element={<Login session={session} />} />
         <Route path="/auth" element={<AuthPage session={session} />} />
         <Route path="/details" element={<EventDetails />} />
+        <Route path="/allocation" element={<AllocationViewer session={session} />} />
+        <Route path="/view-allocation" element={<AllocationViewer session={session} />} />
         <Route 
           path="/dashboard" 
           element={<ParticipantDashboard session={session} />} 

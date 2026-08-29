@@ -4,7 +4,7 @@ import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import { Upload, Download, Users, Settings, Database, Filter, X, Trash2, Plus, Edit2, LayoutDashboard, Clock, Trophy, Award, Search, Medal } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { exportStyledExcel } from '../utils/excelExporter';
+import { exportStyledExcel, exportPanelWiseBatchExcel, getExpectedSolutionForPS } from '../utils/excelExporter';
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -48,13 +48,22 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
   const BATCH_OPTIONS = [
     { id: 'ALL', label: 'All Batches (Batch 1 to 6)' },
-    { id: 'Batch 1', label: 'Batch 1: Day 1 - Track A (FN PPT ➔ AN Proto)' },
-    { id: 'Batch 2', label: 'Batch 2: Day 1 - Track B (FN Proto ➔ AN PPT)' },
-    { id: 'Batch 3', label: 'Batch 3: Day 2 - Track A (FN PPT ➔ AN Proto)' },
-    { id: 'Batch 4', label: 'Batch 4: Day 2 - Track B (FN Proto ➔ AN PPT)' },
-    { id: 'Batch 5', label: 'Batch 5: Day 3 - Track A (FN PPT ➔ AN Proto)' },
-    { id: 'Batch 6', label: 'Batch 6: Day 3 - Track B (FN Proto ➔ AN PPT)' },
+    { id: 'Batch 1', label: 'Batch 1: Day 1 (31st August) - Room D-013' },
+    { id: 'Batch 2', label: 'Batch 2: Day 1 (31st August) - Room C-003' },
+    { id: 'Batch 3', label: 'Batch 3: Day 2 (1st September) - Room C-003' },
+    { id: 'Batch 4', label: 'Batch 4: Day 2 (1st September) - Room D-013' },
+    { id: 'Batch 5', label: 'Batch 5: Day 3 (2nd September) - Room D-013' },
+    { id: 'Batch 6', label: 'Batch 6: Day 3 (2nd September) - Room C-003' },
   ];
+
+  const BATCH_ROOM_MAP: Record<number, string> = {
+    1: 'D-013',
+    2: 'C-003',
+    3: 'C-003',
+    4: 'D-013',
+    5: 'D-013',
+    6: 'C-003'
+  };
 
   const getDayNormalized = (dayStr?: string) => {
     if (!dayStr) return '31st August';
@@ -76,7 +85,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       dayNum = 'Day 3';
       batchNum = session === 'AN' ? 'Batch 6' : 'Batch 5';
     }
-    return `${batchNum} (${dayNum} - ${session || 'FN'})`;
+    return `${batchNum} (${dayNum})`;
   };
 
   const normalizePS = (str?: string) => {
@@ -105,9 +114,6 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
         dayNum: 'Unassigned',
         isAssigned: false,
         isSplit: false,
-        track: 'Unassigned',
-        isTrackA: false,
-        trackName: 'Unassigned',
         batchNumber: 0,
         batchName: 'Unassigned',
         batch: 'Unassigned',
@@ -126,86 +132,72 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
     const normDay = getDayNormalized(rawDay);
     let dayNum = 'Day 1';
-    let pptRoom = evalSettings?.day1_ppt_room || 'C-002';
-    let protoRoom = evalSettings?.day1_proto_room || 'D-013';
-
     if (normDay === '1st September') {
       dayNum = 'Day 2';
-      pptRoom = evalSettings?.day2_ppt_room || 'C-002';
-      protoRoom = evalSettings?.day2_proto_room || 'D-013';
     } else if (normDay === '2nd September') {
       dayNum = 'Day 3';
-      pptRoom = evalSettings?.day3_ppt_room || 'C-002';
-      protoRoom = evalSettings?.day3_proto_room || 'D-013';
     }
 
-    // Determine track: Track A vs Track B (or Split 50/50)
+    // Determine batch grouping
     const psMode = ps?.session || ps?.schedule_track || 'FN';
-    let isTrackA = true;
+    let isFirstGroup = true;
     let isSplit = false;
 
     if (team.schedule_track === 'FN_PROTO_AN_PPT' || team.session === 'AN') {
-      isTrackA = false;
+      isFirstGroup = false;
     } else if (team.schedule_track === 'FN_PPT_AN_PROTO' || team.session === 'FN') {
-      isTrackA = true;
+      isFirstGroup = true;
     } else if (psMode === 'SPLIT' || psMode === 'SPLIT_50_50') {
       isSplit = true;
-      // Find all active teams allocated to this PS and sort them deterministically
       const psTeams = teams
         .filter(t => isPSMatch(t.allocated_ps_id, ps?.id))
-        .sort((a, b) => a.team_name.localeCompare(b.team_name));
+        .sort((a, b) => (a.team_name || '').localeCompare(b.team_name || ''));
       const teamIdx = psTeams.findIndex(t => t.id === team.id);
       const halfCount = Math.ceil(psTeams.length / 2);
-      // First half (0..halfCount-1) -> Track A, Second half -> Track B
-      isTrackA = teamIdx < halfCount;
+      isFirstGroup = teamIdx < halfCount;
     } else if (psMode === 'AN' || psMode === 'FN_PROTO_AN_PPT') {
-      isTrackA = false;
+      isFirstGroup = false;
     } else {
-      isTrackA = true;
+      isFirstGroup = true;
     }
-
-    const fnMode = isTrackA ? 'PPT' : 'Prototype';
-    const fnRoom = isTrackA ? pptRoom : protoRoom;
-
-    const anMode = isTrackA ? 'Prototype' : 'PPT';
-    const anRoom = isTrackA ? protoRoom : pptRoom;
-
-    const trackName = isTrackA ? 'Track A' : 'Track B';
 
     let batchNumber = 1;
     if (dayNum === 'Day 1') {
-      batchNumber = isTrackA ? 1 : 2;
+      batchNumber = isFirstGroup ? 1 : 2;
     } else if (dayNum === 'Day 2') {
-      batchNumber = isTrackA ? 3 : 4;
+      batchNumber = isFirstGroup ? 3 : 4;
     } else if (dayNum === 'Day 3') {
-      batchNumber = isTrackA ? 5 : 6;
+      batchNumber = isFirstGroup ? 5 : 6;
     }
 
+    // Static room allocation: Batch 1: D-013, Batch 2: C-003, Batch 3: C-003, Batch 4: D-013, Batch 5: D-013, Batch 6: C-003
+    const roomNumber = BATCH_ROOM_MAP[batchNumber] || (isFirstGroup ? 'D-013' : 'C-003');
+
+    const fnMode = isFirstGroup ? 'PPT' : 'Prototype';
+    const anMode = isFirstGroup ? 'Prototype' : 'PPT';
+
     const batchName = `Batch ${batchNumber}`;
-    const batch = `Batch ${batchNumber} (${dayNum} - ${trackName})`;
-    const badgeLabel = `Batch ${batchNumber}: ${dayNum}/${trackName} (${isTrackA ? 'FN PPT' : 'FN Proto'})${isSplit ? ' [50/50 Split]' : ''}`;
+    const batch = `Batch ${batchNumber} (${dayNum} - Room ${roomNumber})`;
+    const badgeLabel = `Batch ${batchNumber}: ${dayNum} (Room ${roomNumber})${isSplit ? ' [50/50 Split]' : ''}`;
 
     return {
       day: normDay,
       dayNum,
       isAssigned: true,
       isSplit,
-      track: isTrackA ? 'FN_PPT_AN_PROTO' : 'FN_PROTO_AN_PPT',
-      isTrackA,
-      trackName,
       batchNumber,
       batchName,
       batch,
       badgeLabel,
-      pptRoom,
-      protoRoom,
+      pptRoom: roomNumber,
+      protoRoom: roomNumber,
       fnMode,
-      fnRoom,
+      fnRoom: roomNumber,
       anMode,
-      anRoom,
+      anRoom: roomNumber,
       session: 'FN (09:30 AM) & AN (01:30 PM)',
-      sessionType: `FN: ${fnMode} (${fnRoom}) | AN: ${anMode} (${anRoom})`,
-      roomNumber: `PPT: ${pptRoom} | Proto: ${protoRoom}`
+      sessionType: `FN: ${fnMode} (${roomNumber}) | AN: ${anMode} (${roomNumber})`,
+      roomNumber
     };
   };
 
@@ -306,8 +298,25 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   // Visitor Tracking States
   const [visitorModalOpen, setVisitorModalOpen] = useState(false);
   const [revokeAdminEmail, setRevokeAdminEmail] = useState<string | null>(null);
-  const [visitorData, setVisitorData] = useState<{admins: string[], unregistered: string[], registered: {email: string, visited: boolean}[]}>({ admins: [], unregistered: [], registered: [] });
+  const [visitorData, setVisitorData] = useState<{
+    admins: { email: string; last_visited_at?: string | null }[];
+    knownLeaders: {
+      id: string;
+      team_name: string;
+      tl_name: string;
+      tl_email: string;
+      tl_mobile: string;
+      tl_department?: string;
+      tl_year?: string;
+      visited: boolean;
+      last_visited_at?: string | null;
+    }[];
+    unknownVisitors: { email: string; last_visited_at?: string | null }[];
+  }>({ admins: [], knownLeaders: [], unknownVisitors: [] });
   const [loadingVisitors, setLoadingVisitors] = useState(false);
+  const [knownFilter, setKnownFilter] = useState<'ALL' | 'VISITED' | 'UNVISITED'>('ALL');
+  const [knownSearch, setKnownSearch] = useState('');
+  const [visitorTab, setVisitorTab] = useState<'LEADERS' | 'ADMINS' | 'UNKNOWN'>('LEADERS');
   
   const navigate = useNavigate();
 
@@ -316,36 +325,114 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     fetchProblemStatements();
   }, []);
 
+  const handleRevokeAdmin = async (emailToRevoke: string) => {
+    if (emailToRevoke === session?.user?.email) {
+      alert("You cannot revoke your own admin account.");
+      return;
+    }
+    const confirmed = window.confirm(`Are you sure you want to revoke admin access for ${emailToRevoke}?`);
+    if (!confirmed) return;
+    
+    try {
+      const { error } = await supabase.from('admins').delete().eq('email', emailToRevoke);
+      if (error) {
+        alert("Failed to revoke admin: " + error.message);
+      } else {
+        alert(`Admin access revoked for ${emailToRevoke}`);
+        fetchVisitors();
+      }
+    } catch (err: any) {
+      alert("Error revoking admin: " + err.message);
+    }
+  };
+
+  const formatVisitTime = (dateStr?: string | null) => {
+    if (!dateStr) return 'Not Visited Yet';
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
   const fetchVisitors = async () => {
     setLoadingVisitors(true);
     try {
+      // 1. Fetch admins
       const { data: admins } = await supabase.from('admins').select('email');
-      const adminEmails = (admins || []).map(a => a.email);
+      const adminEmails = (admins || []).map(a => (a.email || '').toLowerCase().trim());
 
-      const { data: visits } = await supabase.from('site_visits').select('email, last_visited_at');
+      // 2. Fetch site visits
+      const { data: visits } = await supabase.from('site_visits').select('email, last_visited_at').order('last_visited_at', { ascending: false });
       
-      const { data: registered } = await supabase.from('registered_emails').select('email');
-      const registeredEmails = (registered || []).map(r => r.email);
+      // 3. Fetch all teams / team leaders
+      const { data: teamsData } = await supabase.from('teams').select('id, team_name, tl_name, tl_email, tl_mobile, tl_department, tl_year');
+      
+      // Build a map of visits with timestamp (email -> last_visited_at)
+      const visitMap = new Map<string, string>();
+      (visits || []).forEach((v: any) => {
+        if (v.email) {
+          const em = v.email.toLowerCase().trim();
+          if (!visitMap.has(em) || new Date(v.last_visited_at) > new Date(visitMap.get(em)!)) {
+            visitMap.set(em, v.last_visited_at);
+          }
+        }
+      });
 
-      const visitedEmails = new Set((visits || []).map(v => v.email));
-      
-      const unregisteredList = (visits || [])
-        .map(v => v.email)
-        .filter(email => !adminEmails.includes(email) && !registeredEmails.includes(email));
-        
-      const registeredList = registeredEmails.map(email => ({
+      // Known visitors = Team Leaders
+      const teamLeadersList = (teamsData || []).map((t: any) => {
+        const email = (t.tl_email || '').toLowerCase().trim();
+        const visitedAt = visitMap.get(email) || null;
+        return {
+          id: t.id,
+          team_name: t.team_name,
+          tl_name: t.tl_name,
+          tl_email: t.tl_email,
+          tl_mobile: t.tl_mobile || '-',
+          tl_department: t.tl_department || '-',
+          tl_year: t.tl_year || '-',
+          visited: !!visitedAt,
+          last_visited_at: visitedAt
+        };
+      });
+
+      const leaderEmailSet = new Set(teamLeadersList.map(t => (t.tl_email || '').toLowerCase().trim()));
+      const adminEmailSet = new Set(adminEmails);
+
+      // Unknown visitors = visits not matching any team leader or admin
+      const unknownVisitorsList = (visits || [])
+        .filter((v: any) => {
+          const em = (v.email || '').toLowerCase().trim();
+          return em && !adminEmailSet.has(em) && !leaderEmailSet.has(em);
+        })
+        .map((v: any) => ({
+          email: v.email,
+          last_visited_at: v.last_visited_at
+        }));
+
+      // Admin list with timestamps
+      const adminList = adminEmails.map(email => ({
         email,
-        visited: visitedEmails.has(email)
+        last_visited_at: visitMap.get(email) || null
       }));
 
       setVisitorData({
-        admins: adminEmails,
-        unregistered: unregisteredList,
-        registered: registeredList
+        admins: adminList,
+        knownLeaders: teamLeadersList,
+        unknownVisitors: unknownVisitorsList
       });
       setVisitorModalOpen(true);
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching visitors:', err);
     } finally {
       setLoadingVisitors(false);
     }
@@ -749,6 +836,60 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       { sheetName: 'PPT Presentations', data: pptRows },
       { sheetName: 'Prototype Evaluations', data: protoRows }
     ], filename);
+  };
+
+  const [selectedPanelBatch, setSelectedPanelBatch] = useState('Batch 1');
+
+  const handleExportPanelWiseBatch = (targetBatch: string = selectedPanelBatch) => {
+    const activeTeams = teams.filter(t => t.allocated_ps_id);
+    const isAll = targetBatch === 'ALL' || targetBatch === 'All';
+
+    const targetTeams = isAll 
+      ? activeTeams 
+      : activeTeams.filter(t => {
+          const slot = getTeamSlotInfo(t);
+          return slot.batchName === targetBatch || slot.batch === targetBatch || slot.batch.startsWith(targetBatch);
+        });
+
+    if (targetTeams.length === 0) {
+      alert("No active teams found for the selected batch.");
+      return;
+    }
+
+    // Deterministic sorting of Problem Statements
+    const psIds = Array.from(new Set(targetTeams.map(t => t.allocated_ps_id))).sort();
+
+    const statementGroups = psIds.map(psId => {
+      const psObj = problemStatements.find(p => isPSMatch(p.id, psId));
+      const groupTeams = targetTeams
+        .filter(t => isPSMatch(t.allocated_ps_id, psId))
+        .sort((a, b) => a.team_name.localeCompare(b.team_name));
+
+      const slot = groupTeams.length > 0 ? getTeamSlotInfo(groupTeams[0]) : null;
+      const roomNum = psObj?.room_number || (slot ? slot.roomNumber : 'PPT: C-002 | Proto: D-013');
+
+      return {
+        id: psObj?.id || psId,
+        title: psObj?.title || 'Problem Statement',
+        description: psObj?.description || '',
+        expectedSolution: getExpectedSolutionForPS(psObj?.id || psId, psObj?.title, psObj?.description),
+        roomNumber: roomNum,
+        panelName: roomNum,
+        teams: groupTeams
+      };
+    });
+
+    const displayBatchName = isAll ? 'All Batches' : targetBatch;
+
+    exportPanelWiseBatchExcel({
+      batchName: displayBatchName,
+      statementGroups,
+      allBatchTeams: targetTeams,
+      evaluations,
+      getTeamSlotInfo,
+      getCategoryName,
+      fileName: isAll ? 'All Batches.xlsx' : `${targetBatch}.xlsx`
+    });
   };
 
   const [savingSchedule, setSavingSchedule] = useState(false);
@@ -1188,15 +1329,16 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
             </div>
         </div>
         
-        <div className="flex items-center gap-4 shrink-0">
+        <div className="flex items-center gap-3 shrink-0">
           <div 
-            className="flex items-center gap-2 bg-black/40 px-3 py-1.5 rounded-full border border-white/10 hidden lg:flex cursor-pointer hover:bg-white/10 transition-colors"
+            className="flex items-center gap-2 bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-full border border-white/10 cursor-pointer transition-colors"
             onClick={fetchVisitors}
+            title="Click to view website visitors and activity"
           >
              <img src={session.user.user_metadata?.avatar_url || `https://ui-avatars.com/api/?name=${session.user.email}`} alt="Avatar" className="w-6 h-6 rounded-full" />
              <span className="text-xs font-medium text-white">{session.user.email}</span>
           </div>
-          <button onClick={() => supabase.auth.signOut()} className="text-sm border border-white/10 text-white px-4 py-2 rounded-md hover:bg-white/10 transition-colors">Sign Out</button>
+          <button onClick={() => supabase.auth.signOut()} className="text-xs sm:text-sm border border-white/10 text-white px-3.5 py-1.5 rounded-md hover:bg-white/10 transition-colors">Sign Out</button>
         </div>
       </nav>
 
@@ -1505,15 +1647,105 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 </div>
               </div>
 
-              {/* Export Reports Batch-wise */}
+              {/* Panel-Wise Batch Segregation Export */}
+              <div className="card max-w-4xl mx-auto mt-6">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-white/10">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
+                      <Download size={20} className="text-gray-300" /> Panel-Wise Batch Segregation Export
+                    </h3>
+                    <p className="text-xs text-gray-400">
+                      Export batch sheets with Problem Statement banners, intelligent Expected Solutions & Benefits, Room/Panel allocations, and complete team details.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto shrink-0">
+                    <select
+                      value={selectedPanelBatch}
+                      onChange={(e) => setSelectedPanelBatch(e.target.value)}
+                      className="text-sm border-white/20 rounded-lg bg-black/40 backdrop-blur-xl border py-2 px-3 focus:ring-white/30 focus:border-white/30 text-white min-w-[220px]"
+                    >
+                      {BATCH_OPTIONS.map((b) => (
+                        <option key={b.id} value={b.id} className="bg-gray-900 text-white">
+                          {b.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button 
+                      onClick={() => handleExportPanelWiseBatch(selectedPanelBatch)}
+                      className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 text-sm flex items-center justify-center gap-2 shrink-0 py-2 px-5 rounded-lg transition-all font-medium cursor-pointer"
+                    >
+                      <Download size={16} /> Export Panel-Wise (.xlsx)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Real-time preview of statements in selected batch */}
+                {(() => {
+                  const isAll = selectedPanelBatch === 'ALL' || selectedPanelBatch === 'All';
+                  const activeBatchTeams = isAll 
+                    ? teams.filter(t => t.allocated_ps_id) 
+                    : teams.filter(t => {
+                        const slot = getTeamSlotInfo(t);
+                        return slot.batchName === selectedPanelBatch || slot.batch === selectedPanelBatch || slot.batch.startsWith(selectedPanelBatch);
+                      });
+                  
+                  const uniquePSIds = Array.from(new Set(activeBatchTeams.map(t => t.allocated_ps_id)));
+
+                  return (
+                    <div className="mt-4 pt-1 space-y-3">
+                      <div className="flex items-center justify-between text-xs text-gray-400">
+                        <span>Selected Target: <strong className="text-white">{isAll ? 'All Batches (1 to 6)' : selectedPanelBatch}</strong> ({activeBatchTeams.length} Teams allocated)</span>
+                        <span>File Name: <code className="text-gray-200 font-mono font-bold">{isAll ? 'All Batches.xlsx' : `${selectedPanelBatch}.xlsx`}</code></span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-56 overflow-y-auto pr-1">
+                        {uniquePSIds.map(psId => {
+                          const psObj = problemStatements.find(p => isPSMatch(p.id, psId));
+                          const psTeams = activeBatchTeams.filter(t => isPSMatch(t.allocated_ps_id, psId));
+                          const slot = psTeams.length > 0 ? getTeamSlotInfo(psTeams[0]) : null;
+
+                          return (
+                            <div key={psId} className="p-3 rounded-lg bg-black/40 border border-white/10 space-y-1.5">
+                              <div className="flex justify-between items-center">
+                                <span className="font-bold text-xs text-white">{psObj?.id || psId}</span>
+                                <span className="text-[11px] font-mono bg-white/10 text-gray-200 px-2 py-0.5 rounded">
+                                  {psTeams.length} Teams
+                                </span>
+                              </div>
+                              <p className="text-xs text-gray-200 font-medium line-clamp-1">{psObj?.title || 'Problem Statement'}</p>
+                              <div className="flex items-center gap-2 text-[11px] text-gray-400 font-mono">
+                                <span>Day: {slot?.day || '31st August'}</span>
+                                <span>•</span>
+                                <span>Room: {psObj?.room_number || slot?.roomNumber || 'C-002'}</span>
+                              </div>
+                              <div className="text-[10px] text-gray-400 bg-white/5 p-2 rounded border border-white/5 line-clamp-2 italic">
+                                {getExpectedSolutionForPS(psObj?.id || psId, psObj?.title, psObj?.description).replace(/[\r\n]+/g, ' ')}
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {uniquePSIds.length === 0 && (
+                          <div className="col-span-2 text-center py-4 text-xs text-gray-500">
+                            No teams currently assigned to this batch.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Export Reports Batch-wise (Standard Evaluation Format) */}
               <div className="card max-w-4xl mx-auto mt-6">
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                   <div>
                     <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
-                      <Download size={20} className="text-gray-300" /> Export Reports Batch-wise (6 Batches)
+                      <Download size={20} className="text-gray-300" /> Export Standard Evaluation Sheets
                     </h3>
                     <p className="text-xs text-gray-400">
-                      Select a specific batch or All Batches to export team evaluation results grouped by batch to Excel.
+                      Export full marks and evaluation breakdown sheets by batch.
                     </p>
                   </div>
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto">
@@ -2859,76 +3091,269 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
       {/* Visitor Modal */}
       {visitorModalOpen && (
-        <div className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <motion.div 
-            initial={{ opacity: 0, scale: 0.95 }}
+            initial={{ opacity: 0, scale: 0.96 }}
             animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            className="card max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col"
+            exit={{ opacity: 0, scale: 0.96 }}
+            className="card max-w-4xl w-full max-h-[85vh] overflow-hidden flex flex-col bg-[#0d0e14] border border-white/15 shadow-2xl"
           >
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold text-white">Website Visitors</h2>
-              <button onClick={() => setVisitorModalOpen(false)} className="text-gray-400 hover:text-gray-600">
-                <X size={24} />
-              </button>
+            {/* Header & Tabs */}
+            <div className="px-6 pt-5 pb-4 border-b border-white/10 shrink-0 space-y-4">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                    <Users size={18} className="text-gray-300" /> Website Visitors
+                  </h2>
+                  <p className="text-xs text-gray-400 mt-0.5">Tracking logins and visits to the platform.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={async () => {
+                      if (window.confirm("Clear all previous visitor logs and start fresh monitoring for View Allocation from now?")) {
+                        try {
+                          const { error } = await supabase.from('site_visits').delete().neq('email', '');
+                          if (error) {
+                            alert("Error resetting logs: " + error.message);
+                          } else {
+                            alert("Visitor logs cleared successfully! Now tracking all new visits.");
+                            fetchVisitors();
+                          }
+                        } catch (err: any) {
+                          alert("Error: " + err.message);
+                        }
+                      }
+                    }}
+                    className="text-xs text-gray-300 hover:text-white bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-white/10 transition-colors"
+                  >
+                    Reset Logs
+                  </button>
+                  <button 
+                    onClick={() => setVisitorModalOpen(false)} 
+                    className="text-gray-400 hover:text-white p-1.5 rounded-lg hover:bg-white/10 transition-colors"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Segmented Tabs */}
+              <div className="flex gap-2 border-b border-white/5 pb-1">
+                <button
+                  onClick={() => setVisitorTab('LEADERS')}
+                  className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
+                    visitorTab === 'LEADERS'
+                      ? 'bg-white/15 text-white shadow-sm border border-white/20'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  <Users size={14} /> Team Leaders
+                  <span className="bg-white/10 px-2 py-0.5 rounded-full text-[10px] text-gray-300 font-mono">
+                    {visitorData.knownLeaders.length}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setVisitorTab('ADMINS')}
+                  className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
+                    visitorTab === 'ADMINS'
+                      ? 'bg-white/15 text-white shadow-sm border border-white/20'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  Admins
+                  <span className="bg-white/10 px-2 py-0.5 rounded-full text-[10px] text-gray-300 font-mono">
+                    {visitorData.admins.length}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setVisitorTab('UNKNOWN')}
+                  className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
+                    visitorTab === 'UNKNOWN'
+                      ? 'bg-white/15 text-white shadow-sm border border-white/20'
+                      : 'text-gray-400 hover:text-white hover:bg-white/5'
+                  }`}
+                >
+                  Other Visitors
+                  <span className="bg-white/10 px-2 py-0.5 rounded-full text-[10px] text-gray-300 font-mono">
+                    {visitorData.unknownVisitors.length}
+                  </span>
+                </button>
+              </div>
             </div>
             
+            {/* Modal Body */}
             {loadingVisitors ? (
-              <div className="py-12 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white/30"></div></div>
+              <div className="py-24 flex flex-col items-center justify-center space-y-3">
+                <div className="animate-spin rounded-full h-8 w-8 border-2 border-white/20 border-t-white"></div>
+                <p className="text-xs text-gray-400">Loading visitors data...</p>
+              </div>
             ) : (
-              <div className="overflow-y-auto pr-2 space-y-6 pb-6">
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Admins ({visitorData.admins.length})</h3>
-                  <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
-                    {visitorData.admins.map(email => (
-                      <div key={email} className="flex justify-between items-center text-sm text-white font-medium px-2 py-1 border-b border-white/10 last:border-0 hover:bg-white/10 transition-colors">
-                        <span>{email}</span>
-                        {email !== session.user.email && (
-                          <button 
-                            onClick={() => setRevokeAdminEmail(email)} 
-                            className="text-red-400 hover:text-red-300 text-xs px-2 py-1 bg-red-900/30 rounded border border-red-900/50"
+              <div className="overflow-y-auto px-6 py-5 space-y-4 flex-1 text-xs">
+                {/* Tab 1: Team Leaders */}
+                {visitorTab === 'LEADERS' && (() => {
+                  const visitedCount = visitorData.knownLeaders.filter(l => l.visited).length;
+                  const unvisitedCount = visitorData.knownLeaders.filter(l => !l.visited).length;
+
+                  const filteredLeaders = visitorData.knownLeaders.filter(leader => {
+                    const matchesFilter = 
+                      knownFilter === 'ALL' ? true :
+                      knownFilter === 'VISITED' ? leader.visited : !leader.visited;
+                    
+                    const query = knownSearch.toLowerCase().trim();
+                    const matchesSearch = !query || 
+                      leader.team_name.toLowerCase().includes(query) ||
+                      leader.tl_name.toLowerCase().includes(query) ||
+                      leader.tl_email.toLowerCase().includes(query) ||
+                      leader.tl_mobile.includes(query);
+
+                    return matchesFilter && matchesSearch;
+                  });
+
+                  return (
+                    <div className="space-y-4">
+                      {/* Filter Bar & Search */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white/[0.02] p-3 rounded-xl border border-white/10">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            onClick={() => setKnownFilter('ALL')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                              knownFilter === 'ALL'
+                                ? 'bg-white/20 text-white shadow-sm'
+                                : 'text-gray-400 hover:text-white bg-white/5'
+                            }`}
                           >
-                            Revoke
+                            All ({visitorData.knownLeaders.length})
                           </button>
+                          <button
+                            onClick={() => setKnownFilter('VISITED')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                              knownFilter === 'VISITED'
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                : 'text-gray-400 hover:text-emerald-300 bg-white/5'
+                            }`}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Visited ({visitedCount})
+                          </button>
+                          <button
+                            onClick={() => setKnownFilter('UNVISITED')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                              knownFilter === 'UNVISITED'
+                                ? 'bg-white/15 text-white'
+                                : 'text-gray-400 hover:text-white bg-white/5'
+                            }`}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-gray-500"></span> Unvisited ({unvisitedCount})
+                          </button>
+                        </div>
+
+                        <div className="relative min-w-[240px]">
+                          <Search size={14} className="absolute left-3 top-2.5 text-gray-500" />
+                          <input
+                            type="text"
+                            placeholder="Search by team, TL name, email..."
+                            value={knownSearch}
+                            onChange={(e) => setKnownSearch(e.target.value)}
+                            className="w-full text-xs pl-8 pr-3 py-1.5 bg-black/40 border border-white/15 rounded-lg text-white placeholder-gray-500 focus:border-white/30"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Leaders Table */}
+                      <div className="bg-white/[0.02] border border-white/10 rounded-xl overflow-hidden divide-y divide-white/5">
+                        {filteredLeaders.map(leader => (
+                          <div key={leader.id} className="p-3.5 hover:bg-white/[0.03] transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <p className="font-bold text-white text-sm">{leader.team_name}</p>
+                                <span className="text-xs text-gray-400 font-normal">({leader.tl_name})</span>
+                              </div>
+                              <p className="text-[11px] text-gray-400 font-mono">
+                                {leader.tl_email} • {leader.tl_mobile} • {leader.tl_department} ({leader.tl_year})
+                              </p>
+                            </div>
+
+                            <div className="shrink-0 flex items-center gap-4">
+                              <div className="text-right">
+                                {leader.visited ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-0.5 rounded-full">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Visited
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-400 bg-white/5 border border-white/10 px-2.5 py-0.5 rounded-full">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-gray-500"></span> Not Visited
+                                  </span>
+                                )}
+                                <p className="text-[10px] text-gray-400 font-mono mt-1">
+                                  {formatVisitTime(leader.last_visited_at)}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+
+                        {filteredLeaders.length === 0 && (
+                          <div className="p-8 text-center text-xs text-gray-400">
+                            No team leaders matched the filter.
+                          </div>
                         )}
                       </div>
-                    ))}
-                  </div>
-                </div>
+                    </div>
+                  );
+                })()}
 
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Unregistered Visitors ({visitorData.unregistered.length})</h3>
-                  <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
-                    {visitorData.unregistered.length === 0 && <span className="text-sm text-gray-400 px-2">No unregistered visitors.</span>}
-                    {visitorData.unregistered.map(email => (
-                      <div key={email} className="text-sm text-white px-2 py-1">{email}</div>
-                    ))}
-                  </div>
-                </div>
+                {/* Tab 2: Admins */}
+                {visitorTab === 'ADMINS' && (
+                  <div className="space-y-3">
+                    <div className="bg-white/[0.02] border border-white/10 rounded-xl overflow-hidden divide-y divide-white/5">
+                      {visitorData.admins.map((admin: any) => (
+                        <div key={admin.email} className="p-3.5 flex items-center justify-between hover:bg-white/[0.03]">
+                          <div className="space-y-0.5">
+                            <p className="font-semibold text-white text-sm">{admin.email}</p>
+                            <p className="text-[11px] text-gray-400 font-mono">
+                              Last active: {formatVisitTime(admin.last_visited_at)}
+                            </p>
+                          </div>
 
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Registered Users ({visitorData.registered.length})</h3>
-                  <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
-                     {visitorData.registered.length === 0 && <span className="text-sm text-gray-400 px-2">No registered emails found.</span>}
-                    {visitorData.registered.map(user => (
-                      <div key={user.email} className="flex justify-between items-center text-sm px-2 py-1.5 border-b border-white/10 last:border-0">
-                        <span className="text-white">{user.email}</span>
-                        {user.visited ? (
-                           <span className="px-2.5 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded-full">Visited</span>
-                        ) : (
-                           <span className="px-2.5 py-1 bg-gray-200 text-gray-500 text-xs font-semibold rounded-full">Not Visited</span>
-                        )}
-                      </div>
-                    ))}
+                          {admin.email !== session.user.email && (
+                            <button 
+                              onClick={() => handleRevokeAdmin(admin.email)} 
+                              className="text-red-400 hover:text-red-300 text-xs px-3 py-1 bg-red-500/10 hover:bg-red-500/20 rounded-lg border border-red-500/20 transition-colors font-medium"
+                            >
+                              Revoke Admin
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {/* Tab 3: Other Visitors */}
+                {visitorTab === 'UNKNOWN' && (
+                  <div className="space-y-3">
+                    <div className="bg-white/[0.02] border border-white/10 rounded-xl overflow-hidden divide-y divide-white/5">
+                      {visitorData.unknownVisitors.length === 0 && (
+                        <div className="p-8 text-center text-xs text-gray-400">No unrecognized visitor logs recorded.</div>
+                      )}
+                      {visitorData.unknownVisitors.map((visitor: any, idx: number) => (
+                        <div key={idx} className="p-3.5 flex justify-between items-center hover:bg-white/[0.03]">
+                          <p className="font-semibold text-white">{visitor.email}</p>
+                          <p className="text-[11px] text-gray-400 font-mono">
+                            {formatVisitTime(visitor.last_visited_at)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </motion.div>
         </div>
       )}
 
-    
       {/* Evaluation Modal */}
       {evalModalOpen && teamToEvaluate && (() => {
         const evalSlot = getTeamSlotInfo(teamToEvaluate);
@@ -3076,14 +3501,18 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
             {/* Option 1: Download Batch Wise */}
             <div className="p-4 rounded-xl bg-black/40 border border-white/10 space-y-3">
               <div className="flex items-center justify-between">
-                <h4 className="font-semibold text-sm text-blue-300">📦 Download Batch-wise</h4>
-                <span className="text-xs text-gray-400">PPT & Prototype tabs</span>
+                <h4 className="font-semibold text-sm text-gray-200">
+                  📦 Download Batch-wise
+                </h4>
+                <span className="text-xs text-gray-400">
+                  PPT & Prototype tabs
+                </span>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                 <select 
                   value={selectedExportBatch} 
                   onChange={e => setSelectedExportBatch(e.target.value)}
-                  className="flex-1 bg-black/60 border border-white/20 rounded-lg py-2 px-3 text-sm text-white focus:ring-1 focus:ring-primary"
+                  className="flex-1 bg-black/60 border border-white/20 rounded-lg py-2 px-3 text-sm text-white focus:ring-1 focus:ring-white/30"
                 >
                   <option value="Batch 1">Batch 1 (Day 1 - Track A)</option>
                   <option value="Batch 2">Batch 2 (Day 1 - Track B)</option>
@@ -3093,18 +3522,31 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                   <option value="Batch 6">Batch 6 (Day 3 - Track B)</option>
                   <option value="ALL">All Batches (1 to 6)</option>
                 </select>
-                <button 
-                  onClick={() => {
-                    handleExportEvaluationsByBatch(selectedExportBatch);
-                    setExportModalOpen(false);
-                  }}
-                  className="bg-primary hover:bg-primary/80 text-white text-sm px-4 py-2 rounded-lg font-medium transition-all shrink-0 flex items-center gap-1.5 cursor-pointer shadow-md"
-                >
-                  <Download size={15} /> Download
-                </button>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => {
+                      handleExportPanelWiseBatch(selectedExportBatch);
+                      setExportModalOpen(false);
+                    }}
+                    className="flex-1 sm:flex-initial bg-white/15 hover:bg-white/25 text-white text-xs px-3.5 py-2 rounded-lg font-medium transition-all shrink-0 flex items-center justify-center gap-1.5 border border-white/15 cursor-pointer"
+                    title="Export sheet with Problem Statement banners & Expected Solutions"
+                  >
+                    <Download size={14} /> Panel-Wise (.xlsx)
+                  </button>
+                  <button 
+                    onClick={() => {
+                      handleExportEvaluationsByBatch(selectedExportBatch);
+                      setExportModalOpen(false);
+                    }}
+                    className="flex-1 sm:flex-initial bg-white/5 hover:bg-white/15 text-gray-300 text-xs px-3 py-2 rounded-lg font-medium transition-all shrink-0 flex items-center justify-center gap-1 border border-white/10 cursor-pointer"
+                    title="Export standard evaluation table"
+                  >
+                    <Download size={14} /> Standard
+                  </button>
+                </div>
               </div>
               <p className="text-[11px] text-gray-400">
-                File will be downloaded as: <code className="text-purple-300 font-mono font-bold">{selectedExportBatch === 'ALL' ? 'All Batches.xlsx' : `${selectedExportBatch}.xlsx`}</code>
+                File will be downloaded as: <code className="text-gray-200 font-mono font-bold">{selectedExportBatch === 'ALL' ? 'All Batches.xlsx' : `${selectedExportBatch}.xlsx`}</code>
               </p>
             </div>
 
