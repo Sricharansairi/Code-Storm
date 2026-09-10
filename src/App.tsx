@@ -6,6 +6,8 @@ import ParticipantDashboard from './pages/ParticipantDashboard';
 import AdminDashboard from './pages/AdminDashboard';
 import AllocationViewer from './pages/AllocationViewer';
 import EventDetails from './pages/EventDetails';
+import StatusCheck from './pages/StatusCheck';
+import CertificatePortal from './pages/CertificatePortal';
 import { useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
 import type { Session } from '@supabase/supabase-js';
@@ -40,6 +42,10 @@ function App() {
     <Router>
       <Routes>
         <Route path="/" element={<Landing />} />
+        <Route path="/status" element={<StatusCheck />} />
+        <Route path="/view-status" element={<StatusCheck />} />
+        <Route path="/certificates" element={<CertificatePortal />} />
+        <Route path="/certificate" element={<CertificatePortal />} />
         <Route path="/login" element={<Login session={session} />} />
         <Route path="/auth" element={<AuthPage session={session} />} />
         <Route path="/details" element={<EventDetails />} />

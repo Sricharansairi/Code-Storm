@@ -2,28 +2,38 @@
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../supabaseClient';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Download, Users, Settings, Database, Filter, X, Trash2, Plus, Edit2, LayoutDashboard, Clock, Trophy, Award, Search, Medal } from 'lucide-react';
+import { Upload, Download, Users, Settings, Database, Filter, X, Trash2, Plus, Edit2, LayoutDashboard, Clock, Trophy, Award, Search, Medal, CheckCircle2, Star, Sparkles, Lock, Unlock, Layers, ShieldCheck, FileCheck, Eye, RefreshCw } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { exportStyledExcel, exportPanelWiseBatchExcel, getExpectedSolutionForPS } from '../utils/excelExporter';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import jsPDF from 'jspdf';
+import JSZip from 'jszip';
 
 interface AdminDashboardProps {
   session: Session;
 }
 
 export default function AdminDashboard({ session }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'upload' | 'settings' | 'evaluations' | 'leaderboard' | 'certificates' | 'logistics'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'upload' | 'settings' | 'evaluations' | 'leaderboard' | 'shortlisted' | 'certificates' | 'logistics'>('dashboard');
 
   const [uploadStatus, setUploadStatus] = useState<string>('');
   const [teams, setTeams] = useState<any[]>([]);
   const [metrics, setMetrics] = useState({ total: 0, allocated: 0, popular: '-' });
 
   // Leaderboard Filter States
+  const [leaderboardBatch, setLeaderboardBatch] = useState('All');
+  const [leaderboardStatus, setLeaderboardStatus] = useState('All');
   const [leaderboardPS, setLeaderboardPS] = useState('All');
   const [leaderboardDept, setLeaderboardDept] = useState('All');
   const [leaderboardYear, setLeaderboardYear] = useState('All');
   const [leaderboardSearch, setLeaderboardSearch] = useState('');
+
+  // Shortlisted Tab Filter States
+  const [shortlistBatch, setShortlistBatch] = useState('All');
+  const [shortlistPS, setShortlistPS] = useState('All');
+  const [shortlistDept, setShortlistDept] = useState('All');
+  const [shortlistSearch, setShortlistSearch] = useState('');
 
   // Evaluation States
   const [evalSettings, setEvalSettings] = useState<any>({ categories: [{ id: 'cat1', name: 'Innovation' }, { id: 'cat2', name: 'Feasibility' }, { id: 'cat3', name: 'Presentation' }, { id: 'cat4', name: 'Technicality' }], maxMarks: 100 });
@@ -207,7 +217,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const [evalFilterStatus, setEvalFilterStatus] = useState('All');
   const [evalModalOpen, setEvalModalOpen] = useState(false);
   const [teamToEvaluate, setTeamToEvaluate] = useState<any>(null);
-  const [evalScores, setEvalScores] = useState<Record<string, number>>({});
+  const [evalScores, setEvalScores] = useState<Record<string, string | number>>({});
   const [savingEval, setSavingEval] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
 
@@ -217,6 +227,470 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
   const [slotSession, setSlotSession] = useState('FN');
   const [slotSessionType, setSlotSessionType] = useState('PPT');
   const [savingSlot, setSavingSlot] = useState(false);
+
+  // Certificate Generator States & Filtered Evaluated Teams (5 Members, Single Great Vibes Font)
+  const [certSelectedTeamId, setCertSelectedTeamId] = useState<string>('');
+  const [certMembers, setCertMembers] = useState<{ role: string; name: string }[]>([
+    { role: 'Team Leader', name: 'Sri Charan' },
+    { role: 'Member 1', name: 'Member 1' },
+    { role: 'Member 2', name: 'Member 2' },
+    { role: 'Member 3', name: 'Member 3' },
+    { role: 'Member 4', name: 'Member 4' },
+  ]);
+  const [certPreviews, setCertPreviews] = useState<string[]>([]);
+  const [certLoadingPreviews, setCertLoadingPreviews] = useState<boolean>(false);
+  const [certGenerating, setCertGenerating] = useState<boolean>(false);
+  const [certStatusMessage, setCertStatusMessage] = useState<string>('');
+  const [zoomCertIndex, setZoomCertIndex] = useState<number | null>(null);
+  const [certViewMode, setCertViewMode] = useState<'preview' | 'audit'>('preview');
+  const [auditSearch, setAuditSearch] = useState<string>('');
+  const [auditFilter, setAuditFilter] = useState<'all' | 'evaluated' | 'non_evaluated' | 'non_eval_granted' | 'downloaded' | 'pending'>('all');
+
+  // Helper to check if a team has completed evaluation
+  const isTeamEvaluated = (teamId: string) => {
+    const evalData = evaluations.find(e => e.team_id === teamId);
+    const isAbsent = Boolean(evalData?.scores?.is_absent || evalData?.is_absent);
+    return Boolean(evalData && !isAbsent && evalData.total_score !== null && evalData.total_score !== undefined);
+  };
+
+  // Filter ONLY evaluated teams (not absent, has valid evaluation score)
+  const evaluatedTeams = useMemo(() => {
+    return teams.filter(t => isTeamEvaluated(t.id));
+  }, [teams, evaluations]);
+
+  // Filter teams for Certificate Download Status Tracker (Covers ALL teams, allowing access management for non-evaluated teams)
+  const filteredAuditTeams = useMemo(() => {
+    return teams.filter(t => {
+      const evalData = evaluations.find(e => e.team_id === t.id);
+      const isEval = isTeamEvaluated(t.id);
+      let sc = evalData?.scores || {};
+      if (typeof sc === 'string') {
+        try { sc = JSON.parse(sc); } catch { sc = {}; }
+      }
+      const isDownloaded = Boolean(sc.certificate_downloaded);
+      const isGrantedForNonEval = Boolean(sc.certificate_access_granted);
+
+      if (auditFilter === 'evaluated' && !isEval) return false;
+      if (auditFilter === 'non_evaluated' && isEval) return false;
+      if (auditFilter === 'non_eval_granted' && (isEval || !isGrantedForNonEval)) return false;
+      if (auditFilter === 'downloaded' && !isDownloaded) return false;
+      if (auditFilter === 'pending' && isDownloaded) return false;
+
+      if (auditSearch.trim()) {
+        const q = auditSearch.toLowerCase();
+        const matchName = t.team_name?.toLowerCase().includes(q);
+        const matchEmail = t.tl_email?.toLowerCase().includes(q);
+        const matchTL = t.tl_name?.toLowerCase().includes(q);
+        const matchPS = t.allocated_ps_id?.toLowerCase().includes(q);
+        if (!matchName && !matchEmail && !matchTL && !matchPS) return false;
+      }
+      return true;
+    });
+  }, [teams, auditFilter, auditSearch, evaluations]);
+
+  // When team selection changes, populate all 5 member slots
+  const handleSelectCertTeam = (teamId: string) => {
+    setCertSelectedTeamId(teamId);
+    if (!teamId) {
+      setCertMembers([
+        { role: 'Team Leader', name: 'Sri Charan' },
+        { role: 'Member 1', name: 'Member 1' },
+        { role: 'Member 2', name: 'Member 2' },
+        { role: 'Member 3', name: 'Member 3' },
+        { role: 'Member 4', name: 'Member 4' },
+      ]);
+      return;
+    }
+    const team = evaluatedTeams.find(t => t.id === teamId) || teams.find(t => t.id === teamId);
+    if (team) {
+      setCertMembers([
+        { role: 'Team Leader', name: team.tl_name || 'Team Leader' },
+        { role: 'Member 1', name: team.members?.[0] || 'Member 1' },
+        { role: 'Member 2', name: team.members?.[1] || 'Member 2' },
+        { role: 'Member 3', name: team.members?.[2] || 'Member 3' },
+        { role: 'Member 4', name: team.members?.[3] || 'Member 4' },
+      ]);
+    }
+  };
+
+  // Auto-select the first evaluated team on load so 5 certificates immediately autofill
+  useEffect(() => {
+    if (activeTab === 'certificates' && evaluatedTeams.length > 0) {
+      if (!certSelectedTeamId || !evaluatedTeams.some(t => t.id === certSelectedTeamId)) {
+        handleSelectCertTeam(evaluatedTeams[0].id);
+      }
+    }
+  }, [activeTab, evaluatedTeams, certSelectedTeamId]);
+
+  const handleUpdateMemberName = (index: number, newName: string) => {
+    setCertMembers(prev => {
+      const copy = [...prev];
+      if (copy[index]) {
+        copy[index] = { ...copy[index], name: newName };
+      }
+      return copy;
+    });
+  };
+
+  // Preload and cache template image without CORS issues for same-origin
+  const certTemplateImgRef = useRef<HTMLImageElement | null>(null);
+  const certTemplateLoadPromiseRef = useRef<Promise<HTMLImageElement> | null>(null);
+
+  const getCertTemplateImage = (): Promise<HTMLImageElement> => {
+    if (certTemplateImgRef.current && certTemplateImgRef.current.complete && certTemplateImgRef.current.naturalWidth > 0) {
+      return Promise.resolve(certTemplateImgRef.current);
+    }
+    if (certTemplateLoadPromiseRef.current) {
+      return certTemplateLoadPromiseRef.current;
+    }
+    certTemplateLoadPromiseRef.current = new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        certTemplateImgRef.current = img;
+        resolve(img);
+      };
+      img.onerror = (e) => {
+        certTemplateLoadPromiseRef.current = null;
+        console.error("Certificate template load error:", e);
+        reject(e);
+      };
+      img.src = '/certificate_template.png';
+    });
+    return certTemplateLoadPromiseRef.current;
+  };
+
+  // Render certificate using the single official cursive font: Great Vibes
+  const renderCertificateToCanvas = async (name: string): Promise<HTMLCanvasElement> => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 3300;
+    canvas.height = 2550;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+
+    const img = await getCertTemplateImage();
+    ctx.drawImage(img, 0, 0, 3300, 2550);
+
+    try {
+      await document.fonts.ready;
+      await document.fonts.load('190px "Great Vibes"');
+    } catch (_) {}
+
+    ctx.fillStyle = '#000000';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+
+    // Single official font: Great Vibes cursive (300 DPI high resolution)
+    let effSize = 190;
+    ctx.font = `${effSize}px "Great Vibes", cursive, serif`;
+    let textWidth = ctx.measureText(name).width;
+    const maxWidth = 1850;
+    if (textWidth > maxWidth) {
+      effSize = Math.floor(effSize * (maxWidth / textWidth));
+      ctx.font = `${effSize}px "Great Vibes", cursive, serif`;
+    }
+
+    // Baseline centered at X=1650, Y=1515 directly above underline
+    ctx.fillText(name, 1650, 1515);
+    return canvas;
+  };
+
+  // Auto-generate live previews for all 5 certificates
+  useEffect(() => {
+    if (activeTab !== 'certificates') return;
+    let isCancelled = false;
+    setCertLoadingPreviews(true);
+
+    const generateAllPreviews = async () => {
+      try {
+        const urls: string[] = [];
+        for (let i = 0; i < certMembers.length; i++) {
+          const m = certMembers[i];
+          const canvas = await renderCertificateToCanvas(m.name || m.role);
+          urls.push(canvas.toDataURL('image/png'));
+        }
+        if (!isCancelled) {
+          setCertPreviews(urls);
+          setCertLoadingPreviews(false);
+        }
+      } catch (err) {
+        console.error("Failed to generate cert previews:", err);
+        if (!isCancelled) setCertLoadingPreviews(false);
+      }
+    };
+
+    const timer = setTimeout(generateAllPreviews, 80);
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [activeTab, certMembers]);
+
+  // Download Single 300 DPI PNG
+  const handleDownloadSingleCertPNG = async (name: string, role: string) => {
+    const trimmed = (name || role).trim();
+    setCertGenerating(true);
+    setCertStatusMessage(`Generating 300 DPI high-res PNG for ${trimmed}...`);
+    try {
+      const canvas = await renderCertificateToCanvas(trimmed);
+      const link = document.createElement('a');
+      link.download = `CodeStorm2026_Certificate_${trimmed.replace(/[^a-zA-Z0-9_-]/g, '_')}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+      setCertStatusMessage(`Downloaded certificate PNG for ${trimmed}`);
+    } catch (err: any) {
+      alert("Error generating PNG: " + err.message);
+    } finally {
+      setCertGenerating(false);
+      setTimeout(() => setCertStatusMessage(''), 3500);
+    }
+  };
+
+  // Download Single PDF
+  const handleDownloadSingleCertPDF = async (name: string, role: string) => {
+    const trimmed = (name || role).trim();
+    setCertGenerating(true);
+    setCertStatusMessage(`Generating official PDF for ${trimmed}...`);
+    try {
+      const canvas = await renderCertificateToCanvas(trimmed);
+      const pdf = new jsPDF({
+        orientation: 'landscape',
+        unit: 'px',
+        format: [3300, 2550]
+      });
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.96), 'JPEG', 0, 0, 3300, 2550);
+      pdf.save(`CodeStorm2026_Certificate_${trimmed.replace(/[^a-zA-Z0-9_-]/g, '_')}.pdf`);
+      setCertStatusMessage(`Downloaded certificate PDF for ${trimmed}`);
+    } catch (err: any) {
+      alert("Error generating PDF: " + err.message);
+    } finally {
+      setCertGenerating(false);
+      setTimeout(() => setCertStatusMessage(''), 3500);
+    }
+  };
+
+  // Download All Team Certificates as Individual Files in a ZIP (PDF or PNG)
+  const handleDownloadAllTeamCertificates = async (format: 'pdf' | 'png') => {
+    if (certMembers.length === 0) return;
+    setCertGenerating(true);
+    setCertStatusMessage(`Generating 5 individual ${format.toUpperCase()} certificates (300 DPI)...`);
+    try {
+      const zip = new JSZip();
+      const team = evaluatedTeams.find(t => t.id === certSelectedTeamId) || teams.find(t => t.id === certSelectedTeamId);
+      const teamLabel = team?.team_name ? team.team_name.replace(/[^a-zA-Z0-9_-]/g, '_') : 'Team';
+
+      for (let i = 0; i < certMembers.length; i++) {
+        const m = certMembers[i];
+        const memName = (m.name || m.role).trim();
+        const roleLabel = i === 0 ? 'Team_Leader' : `Member_${i}`;
+        const safeName = memName.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const filenameBase = `${i + 1}_${roleLabel}_${safeName}`;
+
+        const canvas = await renderCertificateToCanvas(memName);
+
+        if (format === 'pdf') {
+          const pdf = new jsPDF({
+            orientation: 'landscape',
+            unit: 'px',
+            format: [3300, 2550]
+          });
+          pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, 3300, 2550, undefined, 'FAST');
+          const pdfArrayBuffer = pdf.output('arraybuffer');
+          zip.file(`${filenameBase}.pdf`, pdfArrayBuffer);
+        } else {
+          const pngDataUrl = canvas.toDataURL('image/png');
+          const base64Data = pngDataUrl.replace(/^data:image\/png;base64,/, '');
+          zip.file(`${filenameBase}.png`, base64Data, { base64: true });
+        }
+      }
+
+      setCertStatusMessage(`Compressing individual ${format.toUpperCase()} certificates into zip...`);
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const downloadUrl = URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `CodeStorm2026_Individual_${format.toUpperCase()}_Certificates_${teamLabel}.zip`;
+      link.click();
+      URL.revokeObjectURL(downloadUrl);
+      setCertStatusMessage(`Successfully downloaded 5 individual ${format.toUpperCase()} certificates!`);
+    } catch (err: any) {
+      alert("Error generating batch certificates: " + err.message);
+    } finally {
+      setCertGenerating(false);
+      setTimeout(() => setCertStatusMessage(''), 4500);
+    }
+  };
+
+  // Helper to extract team download status
+  const getTeamDownloadStatus = (teamId: string) => {
+    const evalData = evaluations.find(e => e.team_id === teamId);
+    const isEval = isTeamEvaluated(teamId);
+    let sc = evalData?.scores || {};
+    if (typeof sc === 'string') {
+      try { sc = JSON.parse(sc); } catch { sc = {}; }
+    }
+    const explicitGrant = Boolean(sc.certificate_access_granted);
+    return {
+      downloaded: Boolean(sc.certificate_downloaded),
+      at: sc.certificate_downloaded_at ? new Date(sc.certificate_downloaded_at).toLocaleString() : null,
+      by: sc.certificate_downloaded_by || null,
+      format: (sc.certificate_download_format || 'pdf').toUpperCase(),
+      count: sc.certificate_download_count || 0,
+      isEvaluated: isEval,
+      // Evaluated teams are automatically authorized! Non-evaluated teams are authorized if admin gave access!
+      accessGranted: isEval || explicitGrant,
+      explicitGrant
+    };
+  };
+
+  // Admin action to toggle certificate download access for a non-evaluated team
+  const handleToggleTeamAccess = async (teamId: string, currentExplicitGrant: boolean) => {
+    const evalData = evaluations.find(e => e.team_id === teamId);
+    let sc = evalData?.scores || {};
+    if (typeof sc === 'string') {
+      try { sc = JSON.parse(sc); } catch { sc = {}; }
+    }
+    const newAccess = !currentExplicitGrant;
+    const updated = {
+      ...sc,
+      certificate_access_granted: newAccess
+    };
+
+    const payload = {
+      team_id: teamId,
+      cat1_score: evalData?.cat1_score || 0,
+      cat2_score: evalData?.cat2_score || 0,
+      cat3_score: evalData?.cat3_score || 0,
+      cat4_score: evalData?.cat4_score || 0,
+      total_score: evalData?.total_score ?? null,
+      scores: updated,
+      evaluated_by: evalData?.evaluated_by || session.user.email,
+      update_count: evalData ? (evalData.update_count || 0) + 1 : 1,
+      evaluated_at: evalData?.evaluated_at || new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from('evaluations')
+      .upsert(payload, { onConflict: 'team_id' });
+
+    if (error) {
+      alert("Error updating team access: " + error.message);
+    } else {
+      setEvaluations(prev => {
+        const idx = prev.findIndex(e => e.team_id === teamId);
+        if (idx >= 0) {
+          return prev.map(e => e.team_id === teamId ? { ...e, scores: updated } : e);
+        } else {
+          return [...prev, payload];
+        }
+      });
+      setCertStatusMessage(`Certificate download access ${newAccess ? 'GRANTED' : 'LOCKED'} for non-evaluated team!`);
+      setTimeout(() => setCertStatusMessage(''), 3000);
+    }
+  };
+
+  // Admin action to grant access to ALL NON-EVALUATED teams
+  const handleGrantNonEvaluatedAccess = async () => {
+    const nonEvalTeams = teams.filter(t => !isTeamEvaluated(t.id));
+    if (!confirm(`Grant certificate download access to ALL ${nonEvalTeams.length} NON-EVALUATED teams?`)) return;
+    setCertGenerating(true);
+    setCertStatusMessage('Granting download access to non-evaluated teams...');
+    try {
+      for (const t of nonEvalTeams) {
+        const evalData = evaluations.find(e => e.team_id === t.id);
+        let sc = evalData?.scores || {};
+        if (typeof sc === 'string') {
+          try { sc = JSON.parse(sc); } catch { sc = {}; }
+        }
+        sc.certificate_access_granted = true;
+        await supabase.from('evaluations').upsert({
+          team_id: t.id,
+          cat1_score: evalData?.cat1_score || 0,
+          cat2_score: evalData?.cat2_score || 0,
+          cat3_score: evalData?.cat3_score || 0,
+          cat4_score: evalData?.cat4_score || 0,
+          total_score: evalData?.total_score ?? null,
+          scores: sc,
+          evaluated_by: evalData?.evaluated_by || session.user.email,
+          update_count: evalData ? (evalData.update_count || 0) + 1 : 1,
+          evaluated_at: evalData?.evaluated_at || new Date().toISOString()
+        }, { onConflict: 'team_id' });
+      }
+      await fetchEvalData();
+      setCertStatusMessage('Successfully granted download access to ALL non-evaluated teams!');
+    } catch (err: any) {
+      alert('Error granting access: ' + err.message);
+    } finally {
+      setCertGenerating(false);
+      setTimeout(() => setCertStatusMessage(''), 4000);
+    }
+  };
+
+  // Admin action to lock/revoke access for ALL NON-EVALUATED teams
+  const handleRevokeNonEvaluatedAccess = async () => {
+    const nonEvalTeams = teams.filter(t => !isTeamEvaluated(t.id));
+    if (!confirm(`Lock certificate download access for ALL ${nonEvalTeams.length} NON-EVALUATED teams?`)) return;
+    setCertGenerating(true);
+    setCertStatusMessage('Locking download access for non-evaluated teams...');
+    try {
+      for (const t of nonEvalTeams) {
+        const evalData = evaluations.find(e => e.team_id === t.id);
+        let sc = evalData?.scores || {};
+        if (typeof sc === 'string') {
+          try { sc = JSON.parse(sc); } catch { sc = {}; }
+        }
+        sc.certificate_access_granted = false;
+        await supabase.from('evaluations').upsert({
+          team_id: t.id,
+          cat1_score: evalData?.cat1_score || 0,
+          cat2_score: evalData?.cat2_score || 0,
+          cat3_score: evalData?.cat3_score || 0,
+          cat4_score: evalData?.cat4_score || 0,
+          total_score: evalData?.total_score ?? null,
+          scores: sc,
+          evaluated_by: evalData?.evaluated_by || session.user.email,
+          update_count: evalData ? (evalData.update_count || 0) + 1 : 1,
+          evaluated_at: evalData?.evaluated_at || new Date().toISOString()
+        }, { onConflict: 'team_id' });
+      }
+      await fetchEvalData();
+      setCertStatusMessage('Successfully locked access for all non-evaluated teams!');
+    } catch (err: any) {
+      alert('Error revoking access: ' + err.message);
+    } finally {
+      setCertGenerating(false);
+      setTimeout(() => setCertStatusMessage(''), 4000);
+    }
+  };
+
+  // Admin action to reset download limit for a team
+  const handleResetDownloadLimit = async (teamId: string) => {
+    const evalData = evaluations.find(e => e.team_id === teamId);
+    if (!evalData) return;
+    let sc = evalData.scores || {};
+    if (typeof sc === 'string') {
+      try { sc = JSON.parse(sc); } catch { sc = {}; }
+    }
+    const updated = {
+      ...sc,
+      certificate_downloaded: false,
+      certificate_downloaded_at: null
+    };
+    const { error } = await supabase
+      .from('evaluations')
+      .update({ scores: updated })
+      .eq('team_id', teamId);
+
+    if (error) {
+      alert("Error resetting download limit: " + error.message);
+    } else {
+      setEvaluations(prev => prev.map(e => e.team_id === teamId ? { ...e, scores: updated } : e));
+      setCertStatusMessage("Download limit successfully reset for team!");
+      setTimeout(() => setCertStatusMessage(''), 3000);
+    }
+  };
 
   const fetchEvalData = async () => {
     try {
@@ -546,9 +1020,12 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
       if (!match) return false;
     }
     if (evalFilterPS !== 'All' && !isPSMatch(ps.id, evalFilterPS)) return false;
-    const isEvaluated = evaluations.some(e => e.team_id === t.id);
-    if (evalFilterStatus === 'Evaluated' && !isEvaluated) return false;
+    const evalData = evaluations.find(e => e.team_id === t.id);
+    const isEvaluated = Boolean(evalData);
+    const isAbsent = Boolean(evalData?.scores?.is_absent || evalData?.is_absent);
+    if (evalFilterStatus === 'Evaluated' && (!isEvaluated || isAbsent)) return false;
     if (evalFilterStatus === 'Pending' && isEvaluated) return false;
+    if (evalFilterStatus === 'Absent' && !isAbsent) return false;
     return true;
   });
 
@@ -1051,6 +1528,271 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
     }
   };
 
+  const handleMarkAbsent = async (teamId: string) => {
+    const targetTeam = teams.find(t => t.id === teamId) || teamToEvaluate;
+    const confirmed = window.confirm(`Are you sure you want to mark "${targetTeam?.team_name || 'this team'}" as Absent?`);
+    if (!confirmed) return;
+
+    setSavingEval(true);
+    try {
+      const existingEval = evaluations.find(e => e.team_id === teamId);
+      const evalData = {
+        team_id: teamId,
+        cat1_score: 0,
+        cat2_score: 0,
+        cat3_score: 0,
+        cat4_score: 0,
+        total_score: 0,
+        scores: { ...(existingEval?.scores || {}), is_absent: true },
+        evaluated_by: session.user.email,
+        update_count: existingEval ? (existingEval.update_count || 0) + 1 : 1,
+        evaluated_at: new Date().toISOString()
+      };
+
+      const { error } = await supabase.from('evaluations').upsert(evalData, { onConflict: 'team_id' });
+      setSavingEval(false);
+      if (error) {
+        alert("Error marking team as absent: " + error.message);
+      } else {
+        alert(`Team "${targetTeam?.team_name || ''}" marked as Absent successfully.`);
+        setEvalModalOpen(false);
+        fetchEvalData();
+      }
+    } catch (err: any) {
+      setSavingEval(false);
+      alert("Error marking absent: " + err.message);
+    }
+  };
+
+  // Robust Shortlisting Helpers & Handlers
+  const isTeamShortlisted = (evalData?: any): boolean => {
+    if (!evalData || !evalData.scores) return false;
+    if (typeof evalData.scores === 'object') {
+      return Boolean(evalData.scores.is_shortlisted);
+    }
+    if (typeof evalData.scores === 'string') {
+      try {
+        const parsed = JSON.parse(evalData.scores);
+        return Boolean(parsed.is_shortlisted);
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  };
+
+  // Draft / Pending Shortlist Map: { [teamId]: boolean }
+  const [draftShortlistMap, setDraftShortlistMap] = useState<Record<string, boolean>>({});
+  const [commitModalOpen, setCommitModalOpen] = useState(false);
+  const [commitCode, setCommitCode] = useState('');
+  const [commitError, setCommitError] = useState('');
+  const [committingBatch, setCommittingBatch] = useState(false);
+
+  // Helper to determine active shortlist status taking draft changes into account
+  const getEffectiveShortlistStatus = (teamId: string, evalData?: any): boolean => {
+    if (draftShortlistMap[teamId] !== undefined) {
+      return draftShortlistMap[teamId];
+    }
+    return isTeamShortlisted(evalData);
+  };
+
+  // Helper to check if a team has pending uncommitted changes
+  const isTeamDraftChanged = (teamId: string, evalData?: any): boolean => {
+    if (draftShortlistMap[teamId] === undefined) return false;
+    const dbStatus = isTeamShortlisted(evalData);
+    return draftShortlistMap[teamId] !== dbStatus;
+  };
+
+  // Toggle draft shortlist status
+  const handleStageShortlistToggle = (teamId: string, evalData?: any) => {
+    const currentEffective = getEffectiveShortlistStatus(teamId, evalData);
+    const newStatus = !currentEffective;
+    const dbStatus = isTeamShortlisted(evalData);
+
+    setDraftShortlistMap(prev => {
+      const updated = { ...prev };
+      if (newStatus === dbStatus) {
+        delete updated[teamId]; // reverted to saved state
+      } else {
+        updated[teamId] = newStatus;
+      }
+      return updated;
+    });
+  };
+
+  // Get total pending changes count
+  const pendingShortlistCount = Object.keys(draftShortlistMap).filter(teamId => {
+    const evalData = evaluations.find(e => e.team_id === teamId);
+    return isTeamDraftChanged(teamId, evalData);
+  }).length;
+
+  // Execute Batch Commit
+  const handleCommitShortlistChanges = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const codeClean = commitCode.trim().toUpperCase();
+    if (codeClean !== 'INDUS' && codeClean !== '2026') {
+      setCommitError('Invalid Master Code. Please enter INDUS.');
+      return;
+    }
+
+    setCommittingBatch(true);
+    setCommitError('');
+
+    try {
+      const entries = Object.entries(draftShortlistMap);
+      for (const [teamId, shouldShortlist] of entries) {
+        const existingEval = evaluations.find(e => e.team_id === teamId);
+        let parsedScores: any = {};
+        if (existingEval?.scores) {
+          if (typeof existingEval.scores === 'object') {
+            parsedScores = { ...existingEval.scores };
+          } else if (typeof existingEval.scores === 'string') {
+            try { parsedScores = JSON.parse(existingEval.scores); } catch {}
+          }
+        }
+        parsedScores.is_shortlisted = shouldShortlist;
+
+        const evalData = {
+          team_id: teamId,
+          cat1_score: existingEval ? (Number(existingEval.cat1_score) || 0) : 0,
+          cat2_score: existingEval ? (Number(existingEval.cat2_score) || 0) : 0,
+          cat3_score: existingEval ? (Number(existingEval.cat3_score) || 0) : 0,
+          cat4_score: existingEval ? (Number(existingEval.cat4_score) || 0) : 0,
+          total_score: existingEval ? (Number(existingEval.total_score) || 0) : 0,
+          scores: parsedScores,
+          evaluated_by: existingEval?.evaluated_by || session.user.email,
+          update_count: existingEval ? (existingEval.update_count || 0) + 1 : 1,
+          evaluated_at: existingEval?.evaluated_at || new Date().toISOString()
+        };
+
+        const { error } = await supabase.from('evaluations').upsert(evalData, { onConflict: 'team_id' });
+        if (error) {
+          throw new Error(`Failed for team ${teamId}: ${error.message}`);
+        }
+      }
+
+      setDraftShortlistMap({});
+      setCommitModalOpen(false);
+      setCommitCode('');
+      await fetchEvalData();
+      alert("All shortlist changes have been committed and permanently saved to the database!");
+    } catch (err: any) {
+      setCommitError("Error committing changes: " + err.message);
+    } finally {
+      setCommittingBatch(false);
+    }
+  };
+
+  const handleExportAllShortlisted = () => {
+    const shortlistedTeams = teams
+      .filter(t => {
+        const evalData = evaluations.find(e => e.team_id === t.id);
+        return isTeamShortlisted(evalData);
+      })
+      .map((t, index) => {
+        const ps = problemStatements.find(p => isPSMatch(p.id, t.allocated_ps_id));
+        const evalData = evaluations.find(e => e.team_id === t.id);
+        return {
+          'Sl No': index + 1,
+          'Team Name': t.team_name,
+          'Problem Statement ID': t.allocated_ps_id || '-',
+          'Problem Statement Title': ps?.title || '-',
+          'Total Score': evalData ? evalData.total_score : '-',
+          [getCategoryName(0)]: evalData ? evalData.cat1_score : '-',
+          [getCategoryName(1)]: evalData ? evalData.cat2_score : '-',
+          [getCategoryName(2)]: evalData ? evalData.cat3_score : '-',
+          [getCategoryName(3)]: evalData ? evalData.cat4_score : '-',
+          'TL Name': t.tl_name || '-',
+          'TL Email': t.tl_email,
+          'TL Mobile': t.tl_mobile || '-',
+          'Department': t.tl_department || '-',
+          'Year': t.tl_year || '-',
+          'Team Members': (t.members || []).join(', ') || '-',
+          'Shortlist Status': 'Shortlisted'
+        };
+      });
+
+    if (shortlistedTeams.length === 0) {
+      alert("No teams have been shortlisted yet.");
+      return;
+    }
+
+    exportStyledExcel([
+      { sheetName: 'All Shortlisted Teams', data: shortlistedTeams }
+    ], 'CodeStorm_All_Shortlisted_Teams.xlsx');
+  };
+
+  const handleExportStatementWiseShortlisted = () => {
+    const shortlisted = teams.filter(t => {
+      const evalData = evaluations.find(e => e.team_id === t.id);
+      return Boolean(evalData?.scores?.is_shortlisted);
+    });
+
+    if (shortlisted.length === 0) {
+      alert("No teams have been shortlisted yet.");
+      return;
+    }
+
+    // 1. Summary Sheet
+    const psMap: Record<string, { title: string; count: number }> = {};
+    shortlisted.forEach(t => {
+      const psId = t.allocated_ps_id || 'Unallocated';
+      const ps = problemStatements.find(p => isPSMatch(p.id, psId));
+      if (!psMap[psId]) {
+        psMap[psId] = { title: ps?.title || '-', count: 0 };
+      }
+      psMap[psId].count += 1;
+    });
+
+    const summaryData = Object.entries(psMap).map(([psId, info], idx) => ({
+      'Sl No': idx + 1,
+      'Problem Statement ID': psId,
+      'Statement Title': info.title,
+      'Shortlisted Teams Count': info.count
+    }));
+
+    const sheets: any[] = [
+      { sheetName: 'Shortlist Summary', data: summaryData }
+    ];
+
+    // 2. Individual Problem Statement Sheets
+    const groupedByPS: Record<string, typeof shortlisted> = {};
+    shortlisted.forEach(t => {
+      const psId = t.allocated_ps_id || 'Unallocated';
+      if (!groupedByPS[psId]) groupedByPS[psId] = [];
+      groupedByPS[psId].push(t);
+    });
+
+    Object.entries(groupedByPS).forEach(([psId, teamList]) => {
+      const ps = problemStatements.find(p => isPSMatch(p.id, psId));
+      const sheetData = teamList.map((t, index) => {
+        const evalData = evaluations.find(e => e.team_id === t.id);
+        return {
+          'Rank': index + 1,
+          'Team Name': t.team_name,
+          'Problem Statement ID': psId,
+          'Problem Statement Title': ps?.title || '-',
+          'Total Score': evalData ? evalData.total_score : '-',
+          [getCategoryName(0)]: evalData ? evalData.cat1_score : '-',
+          [getCategoryName(1)]: evalData ? evalData.cat2_score : '-',
+          [getCategoryName(2)]: evalData ? evalData.cat3_score : '-',
+          [getCategoryName(3)]: evalData ? evalData.cat4_score : '-',
+          'TL Name': t.tl_name || '-',
+          'TL Email': t.tl_email,
+          'TL Mobile': t.tl_mobile || '-',
+          'Department': t.tl_department || '-',
+          'Year': t.tl_year || '-',
+          'Team Members': (t.members || []).join(', ') || '-'
+        };
+      });
+
+      const cleanSheetName = psId.replace(/[:\\/?*[\]]/g, '_').substring(0, 31);
+      sheets.push({ sheetName: cleanSheetName, data: sheetData });
+    });
+
+    exportStyledExcel(sheets, 'CodeStorm_Statement_Wise_Shortlisted.xlsx');
+  };
+
   const handleDeleteCoordinators = async (day: string, room: string) => {
     const { error } = await supabase.from('room_coordinators').delete().eq('presentation_day', day).eq('room_number', room);
     if (error) {
@@ -1319,6 +2061,18 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 className={`px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'leaderboard' ? 'bg-white/10 text-white shadow-sm border border-white/10' : 'text-gray-400 hover:text-white'}`}
               >
                 <Trophy size={16} className="text-amber-400" /> Leaderboard
+              </button>
+              <button 
+                onClick={() => setActiveTab('shortlisted')}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'shortlisted' ? 'bg-white/10 text-white shadow-sm border border-white/10' : 'text-gray-400 hover:text-white'}`}
+              >
+                <Award size={16} className="text-emerald-400" /> Shortlisted
+              </button>
+              <button 
+                onClick={() => setActiveTab('certificates')}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'certificates' ? 'bg-white/10 text-white shadow-sm border border-white/10' : 'text-gray-400 hover:text-white'}`}
+              >
+                <FileCheck size={16} className="text-amber-300" /> Certificates
               </button>
             </div>
             
@@ -2185,23 +2939,26 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
             >
 
 
-              <div className="card overflow-hidden p-0">
-                <div className="p-6 border-b border-white/10 flex flex-col md:flex-row justify-between items-center gap-4">
-                  <h2 className="text-xl font-bold text-white flex items-center gap-4">
-                    Teams Evaluation 
-                    <button 
-                      onClick={() => setExportModalOpen(true)} 
-                      className="flex items-center justify-center gap-2 bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 text-sm px-3 py-1 rounded transition-all cursor-pointer font-medium"
-                      title="Open Export Options"
-                    >
-                      <Download size={16} /> Export
-                    </button>
-                  </h2>
+              <div className="card overflow-hidden p-0 border border-white/10 bg-white/[0.02]">
+                <div className="p-5 border-b border-white/10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white/[0.01]">
+                  <div>
+                    <h2 className="text-lg font-bold text-white flex items-center gap-3">
+                      Teams Evaluation 
+                      <button 
+                        onClick={() => setExportModalOpen(true)} 
+                        className="flex items-center justify-center gap-1.5 bg-white/5 hover:bg-white/10 text-white border border-white/10 text-xs px-3 py-1 rounded-lg transition-all cursor-pointer font-medium"
+                        title="Open Export Options"
+                      >
+                        <Download size={14} /> Export
+                      </button>
+                    </h2>
+                    <p className="text-xs text-gray-400 mt-0.5 font-mono">Evaluate teams and record marks</p>
+                  </div>
 
-                  <div className="flex flex-wrap items-center gap-4">
-                    <div className="flex flex-col w-full md:w-auto">
-                      <label className="text-xs text-gray-300 mb-1">Batch</label>
-                      <select value={evalFilterBatch} onChange={e => setEvalFilterBatch(e.target.value)} className="text-sm border-white/20 rounded-md bg-black/30 backdrop-blur-xl border py-1.5 px-2 focus:ring-white/30 focus:border-white/30 max-w-[170px]">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex flex-col">
+                      <label className="text-[11px] text-gray-400 font-medium mb-1">Batch</label>
+                      <select value={evalFilterBatch} onChange={e => setEvalFilterBatch(e.target.value)} className="text-xs border-white/10 rounded-lg bg-black/40 border py-1.5 px-2.5 text-gray-200 focus:border-white/30">
                         <option value="All">All Batches</option>
                         {BATCH_OPTIONS.filter(b => b.id !== 'ALL').map(b => (
                           <option key={b.id} value={b.id}>{b.id}</option>
@@ -2209,9 +2966,9 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                       </select>
                     </div>
 
-                    <div className="flex flex-col w-full md:w-auto">
-                      <label className="text-xs text-gray-300 mb-1">Presentation Day</label>
-                      <select value={evalFilterDay} onChange={e => setEvalFilterDay(e.target.value)} className="text-sm border-white/20 rounded-md bg-black/30 backdrop-blur-xl border py-1.5 px-2 focus:ring-white/30 focus:border-white/30 max-w-[150px]">
+                    <div className="flex flex-col">
+                      <label className="text-[11px] text-gray-400 font-medium mb-1">Presentation Day</label>
+                      <select value={evalFilterDay} onChange={e => setEvalFilterDay(e.target.value)} className="text-xs border-white/10 rounded-lg bg-black/40 border py-1.5 px-2.5 text-gray-200 focus:border-white/30">
                         <option value="All">All Days</option>
                         <option value="31st August">31st August</option>
                         <option value="1st September">1st September</option>
@@ -2219,103 +2976,97 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                       </select>
                     </div>
 
-                    <div className="flex flex-col w-full md:w-auto">
-                      <label className="text-xs text-gray-300 mb-1">Problem Statement</label>
-                      <select value={evalFilterPS} onChange={e => setEvalFilterPS(e.target.value)} className="text-sm border-white/20 rounded-md bg-black/30 backdrop-blur-xl border py-1.5 px-2 focus:ring-white/30 focus:border-white/30 max-w-[150px]">
+                    <div className="flex flex-col">
+                      <label className="text-[11px] text-gray-400 font-medium mb-1">Problem Statement</label>
+                      <select value={evalFilterPS} onChange={e => setEvalFilterPS(e.target.value)} className="text-xs border-white/10 rounded-lg bg-black/40 border py-1.5 px-2.5 text-gray-200 focus:border-white/30">
                         {allocatedProblemStatements.map(ps => <option key={ps} value={ps}>{ps}</option>)}
                       </select>
                     </div>
 
-                    <div className="flex flex-col w-full md:w-auto">
-                      <label className="text-xs text-gray-300 mb-1">Status</label>
-                      <select value={evalFilterStatus} onChange={e => setEvalFilterStatus(e.target.value)} className="text-sm border-white/20 rounded-md bg-black/30 backdrop-blur-xl border py-1.5 px-2 focus:ring-white/30 focus:border-white/30 max-w-[150px]">
+                    <div className="flex flex-col">
+                      <label className="text-[11px] text-gray-400 font-medium mb-1">Status</label>
+                      <select value={evalFilterStatus} onChange={e => setEvalFilterStatus(e.target.value)} className="text-xs border-white/10 rounded-lg bg-black/40 border py-1.5 px-2.5 text-gray-200 focus:border-white/30">
                         <option value="All">All</option>
                         <option value="Evaluated">Evaluated</option>
                         <option value="Pending">Pending</option>
+                        <option value="Absent">Absent</option>
                       </select>
                     </div>
                   </div>
                 </div>
 
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
+                  <table className="w-full text-left border-collapse text-xs">
                     <thead>
-                      <tr className="border-b border-white/10 text-gray-300 text-sm bg-black/20">
-                        <th className="p-4 font-semibold w-12 text-center">#</th>
-                        <th className="p-4 font-semibold">Team & Batch</th>
-                        <th className="p-4 font-semibold">PS / Slot / Room</th>
-                        <th className="p-4 font-semibold text-center">Score (100)</th>
-                        <th className="p-4 font-semibold text-center">Updates</th>
-                        <th className="p-4 font-semibold text-right">Action</th>
+                      <tr className="border-b border-white/10 text-gray-400 text-xs font-semibold uppercase tracking-wider bg-white/[0.02]">
+                        <th className="p-3.5 w-12 text-center">#</th>
+                        <th className="p-3.5">Team Name</th>
+                        <th className="p-3.5">Problem Statement</th>
+                        <th className="p-3.5 text-center">Batch No</th>
+                        <th className="p-3.5 text-center">Score (100)</th>
+                        <th className="p-3.5 text-center">Updates</th>
+                        <th className="p-3.5 text-right">Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredEvalTeams.map((team, index) => {
                         const ps = problemStatements.find(p => p.id === team.allocated_ps_id);
                         const evaluation = evaluations.find(e => e.team_id === team.id);
+                        const isAbsent = Boolean(evaluation?.scores?.is_absent || evaluation?.is_absent);
                         const slot = getTeamSlotInfo(team);
                         return (
-                          <tr key={team.id} className="border-b border-white/10 hover:bg-black/20 transition-colors">
-                            <td className="p-4 text-sm text-center text-gray-300 font-medium">{index + 1}</td>
-                            <td className="p-4 text-sm">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <p className="font-bold text-white text-base cursor-pointer hover:underline" onClick={() => {
-                                  setSelectedTeam(team);
-                                  setSlotDay(slot.day);
-                                  setSlotSession(slot.session);
-                                  setSlotSessionType(slot.sessionType);
-                                }}>
-                                  {team.team_name}
-                                </p>
-                                <span className="text-xs font-mono font-bold bg-white/15 text-white border border-white/30 px-2.5 py-0.5 rounded-md shadow-sm tracking-wide">
-                                  {slot.badgeLabel}
+                          <tr key={team.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
+                            <td className="p-3.5 text-center text-gray-500 font-mono text-xs">{index + 1}</td>
+                            <td className="p-3.5">
+                              <p className="font-semibold text-white text-sm cursor-pointer hover:underline" onClick={() => {
+                                setSelectedTeam(team);
+                                setSlotDay(slot.day);
+                                setSlotSession(slot.session);
+                                setSlotSessionType(slot.sessionType);
+                              }}>
+                                {team.team_name}
+                              </p>
+                              <p className="text-[11px] text-gray-400 mt-0.5 font-mono">{team.tl_email}</p>
+                            </td>
+                            <td className="p-3.5 font-mono text-xs font-semibold text-white">
+                              {ps?.id || team.allocated_ps_id || 'N/A'}
+                            </td>
+                            <td className="p-3.5 text-center text-gray-300 font-mono text-xs">
+                              Batch {slot.batchNumber || '-'}
+                            </td>
+                            <td className="p-3.5 text-center font-mono">
+                              {isAbsent ? (
+                                <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20 text-rose-400 font-bold text-[11px] font-mono">
+                                  Absent
                                 </span>
-                              </div>
-                              <p className="text-xs text-gray-300 mt-0.5">{team.tl_email}</p>
-                            </td>
-                            <td className="p-4 text-sm">
-                              <div className="space-y-1.5">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-bold text-white text-base">{ps?.id || 'N/A'}</span>
-                                  <span className="text-xs text-gray-300 font-mono">({slot.day})</span>
-                                </div>
-                                <div className="flex flex-wrap gap-2 text-xs font-mono">
-                                  <span className="bg-white/15 text-white border border-white/20 px-2.5 py-0.5 rounded-md shadow-sm">
-                                    FN (09:30 AM): <strong className="text-white">{slot.fnMode}</strong> in Room <strong className="text-white">{slot.fnRoom}</strong>
-                                  </span>
-                                  <span className="bg-white/10 text-gray-200 border border-white/15 px-2.5 py-0.5 rounded-md shadow-sm">
-                                    AN (01:30 PM): <strong className="text-white">{slot.anMode}</strong> in Room <strong className="text-white">{slot.anRoom}</strong>
-                                  </span>
-                                </div>
-                              </div>
-                            </td>
-                            <td className="p-4 text-sm text-center">
-                              {evaluation ? (
-                                <span className="font-bold text-green-400 text-lg">{evaluation.total_score}</span>
+                              ) : evaluation ? (
+                                <span className="font-bold text-emerald-400 text-sm">{evaluation.total_score}</span>
                               ) : (
-                                <span className="text-gray-500">-</span>
+                                <span className="text-gray-600">-</span>
                               )}
                             </td>
-                            <td className="p-4 text-sm text-center text-gray-400">
+                            <td className="p-3.5 text-center text-gray-400 font-mono text-xs">
                               {evaluation?.update_count || 0}
                             </td>
-                            <td className="p-4 text-sm text-right">
+                            <td className="p-3.5 text-right">
                               <button 
                                 onClick={() => {
                                   setTeamToEvaluate(team);
-                                  if (evaluation) {
+                                  if (evaluation && !isAbsent) {
                                     setEvalScores({
-                                      cat1: evaluation.cat1_score, cat2: evaluation.cat2_score,
-                                      cat3: evaluation.cat3_score, cat4: evaluation.cat4_score
+                                      cat1: evaluation.cat1_score !== undefined && evaluation.cat1_score !== null ? evaluation.cat1_score : '',
+                                      cat2: evaluation.cat2_score !== undefined && evaluation.cat2_score !== null ? evaluation.cat2_score : '',
+                                      cat3: evaluation.cat3_score !== undefined && evaluation.cat3_score !== null ? evaluation.cat3_score : '',
+                                      cat4: evaluation.cat4_score !== undefined && evaluation.cat4_score !== null ? evaluation.cat4_score : ''
                                     });
                                   } else {
-                                    const initScores: Record<string, number> = {}; (evalSettings?.categories || []).forEach((c: any) => initScores[c.id] = 0); setEvalScores(initScores);
+                                    setEvalScores({ cat1: '', cat2: '', cat3: '', cat4: '' });
                                   }
                                   setEvalModalOpen(true);
                                 }}
-                                className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-4 py-1.5 rounded-lg text-xs font-medium transition-all"
+                                className="bg-white/5 hover:bg-white/10 text-white border border-white/10 px-3 py-1 rounded-lg text-xs font-medium transition-all"
                               >
-                                {evaluation ? 'Edit Marks' : 'Evaluate'}
+                                {isAbsent ? 'Edit (Absent)' : evaluation ? 'Edit Marks' : 'Evaluate'}
                               </button>
                             </td>
                           </tr>
@@ -2337,21 +3088,698 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
               transition={{ duration: 0.3, ease: "circOut" }}
               className="space-y-6"
             >
-              <div className="card max-w-2xl mx-auto text-center py-12">
-                <div className="w-16 h-16 bg-blue-500/15 text-blue-400 rounded-2xl flex items-center justify-center mx-auto mb-6 border border-blue-500/20">
-                  <Download size={32} />
+              {/* Header */}
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-black/50 border border-white/10 p-6 rounded-2xl backdrop-blur-xl">
+                <div>
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-white/5 rounded-xl border border-white/10 text-white">
+                      <FileCheck size={28} />
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                        Participation Certificates
+                        <span className="text-xs font-mono font-normal px-2.5 py-0.5 rounded-full bg-white/10 border border-white/15 text-white">
+                          Evaluated Teams Only
+                        </span>
+                      </h2>
+                      <p className="text-xs text-gray-400 mt-1 font-mono">
+                        Official 300 DPI high-resolution certificates (3300 × 2550). Preserves vector-sharp college stamps, signatures, and logos.
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <h2 className="text-2xl font-bold text-white mb-2">Certificate Generation</h2>
-                <p className="text-gray-300 mb-8 max-w-md mx-auto">
-                  The mechanism for uploading a participation certificate template and enabling dynamic generation is currently under development.
-                </p>
-                
-                <div className="border-2 border-dashed border-white/20 rounded-xl p-8 bg-black/20">
-                  <Upload size={32} className="mx-auto text-gray-400 mb-3" />
-                  <p className="text-sm font-medium text-gray-300 mb-1">Template Upload Placeholder</p>
-                  <p className="text-xs text-gray-500">Coming soon in a future update.</p>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  {/* View Mode Toggle */}
+                  <div className="flex items-center bg-black/60 p-1 rounded-xl border border-white/15">
+                    <button
+                      type="button"
+                      onClick={() => setCertViewMode('preview')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                        certViewMode === 'preview'
+                          ? 'bg-white text-black shadow-md'
+                          : 'text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      <Eye size={13} />
+                      <span>Generator & Preview</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCertViewMode('audit')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                        certViewMode === 'audit'
+                          ? 'bg-white text-black shadow-md'
+                          : 'text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      <FileCheck size={13} />
+                      <span>Download Tracker</span>
+                      <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                        certViewMode === 'audit' ? 'bg-black text-white' : 'bg-white/10 text-gray-300'
+                      }`}>
+                        {evaluatedTeams.filter(t => getTeamDownloadStatus(t.id).downloaded).length}/{evaluatedTeams.length}
+                      </span>
+                    </button>
+                  </div>
+
+                  {certViewMode === 'preview' && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleDownloadAllTeamCertificates('pdf')}
+                        disabled={certGenerating || certMembers.length === 0}
+                        className="bg-white hover:bg-gray-100 text-black px-3.5 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all shadow-lg cursor-pointer disabled:opacity-50"
+                        title="Download 5 individual printable PDFs in a zip archive"
+                      >
+                        <FileCheck size={14} /> 5 Individual PDFs (.zip)
+                      </button>
+                      <button
+                        onClick={() => handleDownloadAllTeamCertificates('png')}
+                        disabled={certGenerating || certMembers.length === 0}
+                        className="bg-white/10 hover:bg-white/20 text-white px-3.5 py-1.5 rounded-xl text-xs font-bold border border-white/20 flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                        title="Download 5 individual 300 DPI PNGs in a zip archive"
+                      >
+                        <Download size={14} /> 5 Individual PNGs (.zip)
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
+
+              {/* Status Message Banner */}
+              {certStatusMessage && (
+                <div className="p-3.5 bg-black/60 border border-white/15 rounded-xl text-white text-xs font-mono flex items-center justify-between shadow-lg">
+                  <span className="flex items-center gap-2">
+                    <Sparkles size={14} className="text-white" />
+                    {certStatusMessage}
+                  </span>
+                  {certGenerating && <span className="animate-spin text-white">⏳</span>}
+                </div>
+              )}
+
+              {/* VIEW MODE 1: PREVIEW & GENERATOR */}
+              {certViewMode === 'preview' && (
+                <div className="space-y-6">
+                  {/* Team Selector Card */}
+                  <div className="card p-5 border border-white/10 bg-black/50 backdrop-blur-xl rounded-2xl space-y-4">
+                    <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                      <label className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                        <span>1. Select Team</span>
+                        <span className="text-[10px] text-gray-300 bg-white/10 px-2 py-0.5 rounded-md border border-white/15 font-mono font-normal">
+                          {teams.length} Registered Teams ({evaluatedTeams.length} Evaluated)
+                        </span>
+                      </label>
+                      <span className="text-[11px] text-gray-400 font-mono">
+                        Official Font: <strong className="text-white">Great Vibes (Single Calligraphy Script)</strong>
+                      </span>
+                    </div>
+
+                    {teams.length === 0 ? (
+                      <div className="p-6 text-center border border-dashed border-white/15 rounded-xl bg-white/[0.01] space-y-2">
+                        <p className="text-sm font-semibold text-white">No Teams Found</p>
+                      </div>
+                    ) : (
+                      <>
+                        <select
+                          value={certSelectedTeamId}
+                          onChange={(e) => handleSelectCertTeam(e.target.value)}
+                          className="w-full text-xs sm:text-sm border border-white/15 rounded-xl bg-black/80 py-3 px-4 text-white focus:border-white/40 focus:outline-none transition-colors"
+                        >
+                          {teams.map((t) => {
+                            const evalData = evaluations.find(e => e.team_id === t.id);
+                            const st = getTeamDownloadStatus(t.id);
+                            const evalLabel = st.isEvaluated ? `Evaluated: ${evalData?.total_score}/100` : 'Non-Evaluated';
+                            const accessLabel = st.isEvaluated ? '🔓 [Auto-Granted]' : (st.explicitGrant ? '🔓 [Admin-Granted]' : '🔒 [Access Locked]');
+                            return (
+                              <option key={t.id} value={t.id}>
+                                {t.team_name} — TL: {t.tl_name || 'TL'} ({evalLabel} • PS: {t.allocated_ps_id || 'No PS'}) {accessLabel} {st.downloaded ? '✓ [Downloaded]' : ''}
+                              </option>
+                            );
+                          })}
+                        </select>
+
+                        {certSelectedTeamId && (() => {
+                          const selectedT = teams.find(t => t.id === certSelectedTeamId);
+                          const evalData = evaluations.find(e => e.team_id === certSelectedTeamId);
+                          const st = getTeamDownloadStatus(certSelectedTeamId);
+                          return (
+                            <div className="flex flex-wrap items-center gap-2 pt-1">
+                              <span className="px-2.5 py-1 rounded-lg text-xs bg-white/5 border border-white/10 text-gray-300">
+                                Team: <strong className="text-white">{selectedT?.team_name}</strong>
+                              </span>
+                              <span className="px-2.5 py-1 rounded-lg text-xs bg-white/5 border border-white/10 text-gray-300">
+                                PS ID: <strong className="text-white">{selectedT?.allocated_ps_id || 'N/A'}</strong>
+                              </span>
+                              <span className="px-2.5 py-1 rounded-lg text-xs bg-white/5 border border-white/10 text-gray-300">
+                                Department: <strong className="text-white">{selectedT?.tl_department || 'N/A'}</strong>
+                              </span>
+                              <span className="px-2.5 py-1 rounded-lg text-xs bg-white/10 border border-white/15 text-white font-mono">
+                                Evaluation: <strong className={st.isEvaluated ? "text-emerald-400" : "text-amber-400"}>{st.isEvaluated ? `${evalData?.total_score} / 100` : 'Non-Evaluated'}</strong>
+                              </span>
+                              <span className={`px-2.5 py-1 rounded-lg text-xs border font-mono flex items-center gap-1 ${
+                                st.accessGranted 
+                                  ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' 
+                                  : 'bg-rose-500/10 text-rose-300 border-rose-500/20'
+                              }`}>
+                                {st.accessGranted ? <Unlock size={11} /> : <Lock size={11} />}
+                                {st.isEvaluated ? 'Evaluated (Auto-Unlocked)' : (st.explicitGrant ? 'Non-Eval (Admin Unlocked)' : 'Non-Eval (Locked)')}
+                              </span>
+                              {st.downloaded ? (
+                                <span className="px-2.5 py-1 rounded-lg text-xs bg-white/10 text-white border border-white/20 flex items-center gap-1 font-mono">
+                                  <CheckCircle2 size={12} className="text-emerald-400" /> Downloaded ({st.format} on {st.at})
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-1 rounded-lg text-xs bg-white/5 text-gray-400 border border-white/10 flex items-center gap-1 font-mono">
+                                  <Clock size={12} /> Pending Download
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
+
+                  {/* Notice Alerting that Names Can Be Edited */}
+                  <div className="p-3.5 bg-black/40 border border-white/10 rounded-xl flex items-center justify-between gap-3 text-xs text-gray-300 font-mono">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-1.5 rounded-lg bg-white/10 text-white shrink-0">
+                        <Edit2 size={15} />
+                      </div>
+                      <div>
+                        <span className="font-bold text-white">Names are editable:</span> You can click <strong className="text-white">"Edit Name"</strong> on any member card below to fix typos before downloading. Previews re-render automatically.
+                      </div>
+                    </div>
+                    <span className="hidden sm:inline-block px-2 py-0.5 rounded text-[10px] bg-white/10 border border-white/15 text-gray-300">
+                      Live Re-render
+                    </span>
+                  </div>
+
+                  {/* 5 Certificates Preview Gallery */}
+                  <div className="space-y-4">
+                    <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
+                      <div>
+                        <h3 className="text-base font-bold text-white flex items-center gap-2">
+                          2. Team Certificates ({certMembers.length} Autofilled Previews)
+                        </h3>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          The team leader and 4 members are automatically populated. You can edit any name directly to fix typos.
+                        </p>
+                      </div>
+                      {certLoadingPreviews && (
+                        <span className="text-xs text-gray-300 flex items-center gap-1.5 font-mono animate-pulse">
+                          <span className="w-2 h-2 rounded-full bg-white animate-ping"></span> Rendering high-res previews...
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Grid of 5 Certificates */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                      {certMembers.map((m, idx) => {
+                        const isTL = idx === 0;
+                        const previewUrl = certPreviews[idx];
+                        const adminInputId = `admin-cert-member-input-${idx}`;
+                        return (
+                          <div
+                            key={idx}
+                            className="card p-4 rounded-2xl border border-white/10 bg-black/50 backdrop-blur-xl hover:border-white/20 transition-all space-y-3 flex flex-col justify-between"
+                          >
+                            {/* Card Header: Role & Actions */}
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1.5 font-mono bg-white/10 text-white border border-white/10">
+                                  {isTL ? 'Team Leader' : `Member ${idx}`}
+                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDownloadSingleCertPNG(m.name, m.role)}
+                                    disabled={certGenerating}
+                                    className="px-2 py-1 rounded-lg text-[11px] font-semibold bg-white/5 hover:bg-white/15 text-gray-300 hover:text-white border border-white/10 transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                    title="Download 300 DPI PNG"
+                                  >
+                                    <Download size={11} /> PNG
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDownloadSingleCertPDF(m.name, m.role)}
+                                    disabled={certGenerating}
+                                    className="px-2 py-1 rounded-lg text-[11px] font-bold bg-white/15 hover:bg-white/25 text-white border border-white/20 transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                    title="Download official PDF"
+                                  >
+                                    <FileCheck size={11} /> PDF
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Editable Name Input with visible Edit button and label */}
+                              <div className="space-y-1">
+                                <div className="flex items-center justify-between text-[11px] text-gray-400 font-mono px-0.5">
+                                  <span>Full Name on Certificate:</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const el = document.getElementById(adminInputId);
+                                      if (el) { el.focus(); (el as HTMLInputElement).select(); }
+                                    }}
+                                    className="text-[10px] text-white hover:underline flex items-center gap-1 font-bold cursor-pointer"
+                                  >
+                                    <Edit2 size={10} /> Edit Name
+                                  </button>
+                                </div>
+                                <div className="relative">
+                                  <input
+                                    id={adminInputId}
+                                    type="text"
+                                    value={m.name}
+                                    onChange={(e) => handleUpdateMemberName(idx, e.target.value)}
+                                    placeholder={`Enter ${m.role} Name`}
+                                    className="w-full text-xs font-semibold bg-black/70 border border-white/15 rounded-xl py-2 pl-3 pr-16 text-white placeholder-gray-500 focus:outline-none focus:border-white focus:ring-1 focus:ring-white transition-all hover:border-white/30"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const el = document.getElementById(adminInputId);
+                                      if (el) { el.focus(); (el as HTMLInputElement).select(); }
+                                    }}
+                                    className="absolute right-1.5 top-1/2 -translate-y-1/2 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-white/10 hover:bg-white/20 text-white border border-white/15 flex items-center gap-1 cursor-pointer transition-all"
+                                    title="Click to edit name"
+                                  >
+                                    <Edit2 size={10} /> Edit
+                                  </button>
+                                </div>
+                                <p className="text-[10px] text-gray-400 font-mono flex items-center gap-1 px-1">
+                                  <span>💡</span>
+                                  <span>Click input or 'Edit' to change spelling</span>
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Certificate Image Preview */}
+                            <div 
+                              onClick={() => previewUrl && setZoomCertIndex(idx)}
+                              className="relative aspect-[3300/2550] w-full overflow-hidden rounded-xl border border-white/10 bg-black/60 group cursor-pointer shadow-md"
+                              title="Click to zoom and inspect high-res certificate"
+                            >
+                              {previewUrl ? (
+                                <>
+                                  <img
+                                    src={previewUrl}
+                                    alt={`Certificate for ${m.name}`}
+                                    className="w-full h-full object-contain rounded-xl transition-transform duration-300 group-hover:scale-[1.02]"
+                                  />
+                                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 text-white text-xs font-bold backdrop-blur-[2px]">
+                                    <Eye size={16} /> Click to Inspect
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-gray-500 text-xs font-mono">
+                                  <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                                  <span>Rendering...</span>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="text-[10px] text-gray-400 flex items-center justify-between font-mono pt-1">
+                              <span>300 DPI Official Format</span>
+                              <span className="text-gray-300 font-semibold">Font: Great Vibes</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* VIEW MODE 2: DOWNLOAD STATUS TRACKER */}
+              {certViewMode === 'audit' && (
+                <div className="space-y-5">
+                  {/* Summary Metric Cards (4 Cards) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="card p-5 border border-white/10 bg-black/50 backdrop-blur-xl rounded-2xl space-y-1">
+                      <span className="text-xs font-mono text-gray-400 block uppercase">Total Registered</span>
+                      <strong className="text-2xl font-bold text-white block">{teams.length}</strong>
+                      <span className="text-[11px] text-gray-400 font-mono">
+                        {evaluatedTeams.length} Evaluated • {teams.length - evaluatedTeams.length} Non-Evaluated
+                      </span>
+                    </div>
+
+                    <div className="card p-5 border border-white/10 bg-black/50 backdrop-blur-xl rounded-2xl space-y-1">
+                      <span className="text-xs font-mono text-emerald-400 block uppercase flex items-center gap-1">
+                        <CheckCircle2 size={12} /> Evaluated (Auto-Granted)
+                      </span>
+                      <strong className="text-2xl font-bold text-emerald-400 block">
+                        {evaluatedTeams.length}
+                      </strong>
+                      <span className="text-[11px] text-gray-400 font-mono">
+                        100% full download access (Never locked)
+                      </span>
+                    </div>
+
+                    <div className="card p-5 border border-white/10 bg-black/50 backdrop-blur-xl rounded-2xl space-y-1">
+                      <span className="text-xs font-mono text-amber-400 block uppercase flex items-center gap-1">
+                        <Unlock size={12} /> Non-Evaluated Access
+                      </span>
+                      <strong className="text-2xl font-bold text-amber-300 block">
+                        {teams.filter(t => !isTeamEvaluated(t.id) && getTeamDownloadStatus(t.id).explicitGrant).length}
+                      </strong>
+                      <span className="text-[11px] text-gray-400 font-mono">
+                        Granted of {teams.length - evaluatedTeams.length} non-evaluated teams
+                      </span>
+                    </div>
+
+                    <div className="card p-5 border border-white/10 bg-black/50 backdrop-blur-xl rounded-2xl space-y-1">
+                      <span className="text-xs font-mono text-gray-400 block uppercase flex items-center gap-1">
+                        <CheckCircle2 size={12} className="text-emerald-400" /> Completed Downloads
+                      </span>
+                      <strong className="text-2xl font-bold text-white block">
+                        {teams.filter(t => getTeamDownloadStatus(t.id).downloaded).length}
+                      </strong>
+                      <span className="text-[11px] text-gray-400 font-mono">
+                        {teams.length > 0 
+                          ? Math.round((teams.filter(t => getTeamDownloadStatus(t.id).downloaded).length / teams.length) * 100) 
+                          : 0}% total claim rate
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Batch Access Controls Toolbar (Specifically for Non-Evaluated Teams) */}
+                  <div className="card p-4 border border-white/10 bg-black/50 backdrop-blur-xl rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 shrink-0">
+                        <ShieldCheck size={20} />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                          Non-Evaluated Team Certificate Access Controls
+                        </h4>
+                        <p className="text-[11px] text-gray-400 font-mono">
+                          Evaluated teams have automatic access. Use these controls to give or revoke download access for all other non-evaluated teams.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 w-full sm:w-auto">
+                      <button
+                        type="button"
+                        onClick={handleGrantNonEvaluatedAccess}
+                        disabled={certGenerating || (teams.length - evaluatedTeams.length) === 0}
+                        className="flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        title="Allow all non-evaluated teams to download their certificates"
+                      >
+                        <Unlock size={14} /> Give Access to All Non-Evaluated
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleRevokeNonEvaluatedAccess}
+                        disabled={certGenerating || (teams.length - evaluatedTeams.length) === 0}
+                        className="flex-1 sm:flex-initial px-3.5 py-2 rounded-xl text-xs font-bold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        title="Lock certificate download access for all non-evaluated teams"
+                      >
+                        <Lock size={14} /> Lock All Non-Evaluated
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Search and Filter Controls */}
+                  <div className="card p-4 border border-white/10 bg-black/50 backdrop-blur-xl rounded-2xl flex flex-col md:flex-row items-center justify-between gap-3">
+                    <div className="relative w-full md:w-80">
+                      <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={auditSearch}
+                        onChange={(e) => setAuditSearch(e.target.value)}
+                        placeholder="Search team, TL email, or PS..."
+                        className="w-full text-xs bg-black/60 border border-white/15 rounded-xl py-2 pl-9 pr-4 text-white placeholder-gray-500 focus:outline-none focus:border-white/40"
+                      />
+                      {auditSearch && (
+                        <button
+                          type="button"
+                          onClick={() => setAuditSearch('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
+                        >
+                          <X size={13} />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Filter Pills */}
+                    <div className="flex items-center gap-1.5 w-full md:w-auto overflow-x-auto">
+                      <button
+                        type="button"
+                        onClick={() => setAuditFilter('all')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors cursor-pointer ${
+                          auditFilter === 'all' ? 'bg-white text-black font-bold' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'
+                        }`}
+                      >
+                        All ({teams.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAuditFilter('evaluated')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors cursor-pointer ${
+                          auditFilter === 'evaluated' ? 'bg-emerald-400 text-black font-bold' : 'bg-emerald-500/10 text-emerald-300 hover:text-white border border-emerald-500/20'
+                        }`}
+                      >
+                        Evaluated ({evaluatedTeams.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAuditFilter('non_evaluated')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors cursor-pointer ${
+                          auditFilter === 'non_evaluated' ? 'bg-amber-400 text-black font-bold' : 'bg-amber-500/10 text-amber-300 hover:text-white border border-amber-500/20'
+                        }`}
+                      >
+                        Non-Evaluated ({teams.length - evaluatedTeams.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAuditFilter('non_eval_granted')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors cursor-pointer ${
+                          auditFilter === 'non_eval_granted' ? 'bg-emerald-400 text-black font-bold' : 'bg-emerald-500/10 text-emerald-300 hover:text-white border border-emerald-500/20'
+                        }`}
+                      >
+                        Non-Eval Granted ({teams.filter(t => !isTeamEvaluated(t.id) && getTeamDownloadStatus(t.id).explicitGrant).length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAuditFilter('downloaded')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors cursor-pointer ${
+                          auditFilter === 'downloaded' ? 'bg-white text-black font-bold' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'
+                        }`}
+                      >
+                        Downloaded ({teams.filter(t => getTeamDownloadStatus(t.id).downloaded).length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAuditFilter('pending')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-colors cursor-pointer ${
+                          auditFilter === 'pending' ? 'bg-white text-black font-bold' : 'bg-white/5 text-gray-400 hover:text-white border border-white/10'
+                        }`}
+                      >
+                        Pending ({teams.filter(t => !getTeamDownloadStatus(t.id).downloaded).length})
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Audit Table */}
+                  <div className="card border border-white/10 bg-black/50 backdrop-blur-xl rounded-2xl overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs font-mono">
+                        <thead>
+                          <tr className="border-b border-white/10 bg-white/[0.02] text-gray-400 uppercase text-[10px]">
+                            <th className="py-3 px-4">#</th>
+                            <th className="py-3 px-4">Team Name</th>
+                            <th className="py-3 px-4">Team Leader Email</th>
+                            <th className="py-3 px-4">PS ID</th>
+                            <th className="py-3 px-4">Dept / Year</th>
+                            <th className="py-3 px-4">Evaluation</th>
+                            <th className="py-3 px-4 text-center">Download Access</th>
+                            <th className="py-3 px-4">Download Status</th>
+                            <th className="py-3 px-4 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-white/5">
+                          {filteredAuditTeams.length === 0 ? (
+                            <tr>
+                              <td colSpan={9} className="text-center py-8 text-gray-500">
+                                No teams match the selected filter.
+                              </td>
+                            </tr>
+                          ) : (
+                            filteredAuditTeams.map((team, idx) => {
+                              const st = getTeamDownloadStatus(team.id);
+                              const evalData = evaluations.find(e => e.team_id === team.id);
+                              return (
+                                <tr key={team.id} className="hover:bg-white/[0.02] transition-colors">
+                                  <td className="py-3 px-4 text-gray-500">{idx + 1}</td>
+                                  <td className="py-3 px-4">
+                                    <strong className="text-white block">{team.team_name}</strong>
+                                    <span className="text-[10px] text-gray-400">
+                                      {team.tl_name} • {(team.members?.length || 0) + 1} members
+                                    </span>
+                                  </td>
+                                  <td className="py-3 px-4 text-gray-300">{team.tl_email || '—'}</td>
+                                  <td className="py-3 px-4 text-white font-bold">{team.allocated_ps_id || '—'}</td>
+                                  <td className="py-3 px-4 text-gray-400">
+                                    {team.tl_department || '—'} ({team.tl_year || '—'})
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    {st.isEvaluated ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">
+                                        <CheckCircle2 size={10} /> Graded ({evalData?.total_score}/100)
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                                        <Clock size={10} /> Non-Evaluated
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-3 px-4 text-center">
+                                    {st.isEvaluated ? (
+                                      <span 
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                                        title="Evaluated teams are automatically authorized to download their certificates"
+                                      >
+                                        <CheckCircle2 size={11} /> Auto-Granted
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleToggleTeamAccess(team.id, st.explicitGrant)}
+                                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer border ${
+                                          st.explicitGrant
+                                            ? 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border-emerald-500/30'
+                                            : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border-amber-500/30'
+                                        }`}
+                                        title={st.explicitGrant ? "Click to lock / revoke access for this non-evaluated team" : "Click to GIVE ACCESS for this non-evaluated team to download"}
+                                      >
+                                        {st.explicitGrant ? (
+                                          <>
+                                            <Unlock size={12} /> Granted (Revoke)
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Lock size={12} /> Give Access
+                                          </>
+                                        )}
+                                      </button>
+                                    )}
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    {st.downloaded ? (
+                                      <div className="space-y-0.5">
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                          <CheckCircle2 size={11} /> Downloaded ({st.format})
+                                        </span>
+                                        <div className="text-[10px] text-gray-400">
+                                          {st.at}
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-white/5 text-gray-400 border border-white/10">
+                                        <Clock size={11} /> Pending
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-3 px-4 text-right">
+                                    <div className="flex items-center justify-end gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setCertSelectedTeamId(team.id);
+                                          setCertViewMode('preview');
+                                        }}
+                                        className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/10 hover:bg-white/20 text-white border border-white/15 transition-colors flex items-center gap-1 cursor-pointer"
+                                        title="Preview certificates for this team"
+                                      >
+                                        <Eye size={11} /> Preview
+                                      </button>
+                                      {st.downloaded && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (confirm(`Are you sure you want to reset the download limit for team "${team.team_name}"?\nThis will allow the team leader to download their certificates again.`)) {
+                                              handleResetDownloadLimit(team.id);
+                                            }
+                                          }}
+                                          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white/5 hover:bg-white/15 text-gray-300 hover:text-white border border-white/10 transition-colors flex items-center gap-1 cursor-pointer"
+                                          title="Reset one-time download limit so team can download again"
+                                        >
+                                          <RefreshCw size={11} /> Reset Limit
+                                        </button>
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Full-Screen Zoom Inspection Modal */}
+              {zoomCertIndex !== null && certMembers[zoomCertIndex] && (
+                <div 
+                  className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 sm:p-6"
+                  onClick={() => setZoomCertIndex(null)}
+                >
+                  <div 
+                    className="relative max-w-5xl w-full bg-zinc-950 border border-white/20 rounded-2xl overflow-hidden shadow-2xl space-y-4 p-5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                      <div>
+                        <h4 className="text-base font-bold text-white flex items-center gap-2">
+                          <span>High-Resolution Inspection:</span>
+                          <span className="text-amber-400 font-mono">{certMembers[zoomCertIndex].name}</span>
+                          <span className="text-xs text-gray-400">({certMembers[zoomCertIndex].role})</span>
+                        </h4>
+                        <p className="text-[11px] text-gray-400">Vector-sharp preview of the 3300 × 2550 official certificate</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadSingleCertPNG(certMembers[zoomCertIndex].name, certMembers[zoomCertIndex].role)}
+                          className="btn-secondary text-xs py-1.5 px-3 flex items-center gap-1 cursor-pointer"
+                        >
+                          <Download size={13} /> PNG
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadSingleCertPDF(certMembers[zoomCertIndex].name, certMembers[zoomCertIndex].role)}
+                          className="btn-primary text-xs py-1.5 px-3 font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <FileCheck size={13} /> PDF
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setZoomCertIndex(null)}
+                          className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white transition-colors cursor-pointer ml-2"
+                        >
+                          <X size={18} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="w-full max-h-[75vh] overflow-auto rounded-xl border border-white/10 bg-black flex items-center justify-center p-2">
+                      {certPreviews[zoomCertIndex] ? (
+                        <img
+                          src={certPreviews[zoomCertIndex]}
+                          alt="Certificate Zoom"
+                          className="max-w-full max-h-[72vh] object-contain rounded-lg shadow-2xl"
+                        />
+                      ) : (
+                        <div className="py-20 text-gray-400">Loading certificate...</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
 
@@ -2508,17 +3936,27 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 const ps = problemStatements.find(p => isPSMatch(p.id, t.allocated_ps_id));
                 const evalData = evaluations.find(e => e.team_id === t.id);
                 const slot = getTeamSlotInfo(t);
-                const totalScore = evalData ? Number(evalData.total_score) : null;
+                const isAbsent = Boolean(evalData?.scores?.is_absent || evalData?.is_absent);
+                const isShortlisted = getEffectiveShortlistStatus(t.id, evalData);
+                const isStaged = isTeamDraftChanged(t.id, evalData);
+                const totalScore = (evalData && !isAbsent) ? Number(evalData.total_score) : null;
                 return {
                   team: t,
                   ps,
                   evalData,
                   slot,
                   totalScore,
+                  isAbsent,
+                  isShortlisted,
+                  isStaged,
                   isEvaluated: evalData !== undefined
                 };
               })
               .filter(item => {
+                if (leaderboardBatch !== 'All' && `Batch ${item.slot.batchNumber}` !== leaderboardBatch && item.slot.batchName !== leaderboardBatch) return false;
+                if (leaderboardStatus === 'Shortlisted' && !item.isShortlisted) return false;
+                if (leaderboardStatus === 'Evaluated' && (!item.isEvaluated || item.isAbsent)) return false;
+                if (leaderboardStatus === 'Absent' && !item.isAbsent) return false;
                 if (leaderboardPS !== 'All' && !isPSMatch(item.ps?.id || item.team.allocated_ps_id, leaderboardPS)) return false;
                 if (leaderboardDept !== 'All' && item.team.tl_department !== leaderboardDept) return false;
                 if (leaderboardYear !== 'All' && item.team.tl_year !== leaderboardYear) return false;
@@ -2532,6 +3970,8 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 return true;
               })
               .sort((a, b) => {
+                if (a.isAbsent && !b.isAbsent) return 1;
+                if (!a.isAbsent && b.isAbsent) return -1;
                 const scoreA = a.totalScore ?? -1;
                 const scoreB = b.totalScore ?? -1;
                 if (scoreB !== scoreA) return scoreB - scoreA;
@@ -2542,7 +3982,7 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
             const availableYears = ['All', ...Array.from(new Set(teams.map(t => t.tl_year).filter(Boolean))).sort()];
             const availablePSList = ['All', ...Array.from(new Set(teams.map(t => t.allocated_ps_id).filter(Boolean))).sort()];
 
-            const top3 = ranked.filter(r => r.totalScore !== null).slice(0, 3);
+            const top3 = ranked.filter(r => r.totalScore !== null && !r.isAbsent).slice(0, 3);
 
             return (
               <motion.div
@@ -2559,48 +3999,85 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                     <h2 className="text-2xl font-bold text-white flex items-center gap-2">
                       <Trophy className="text-amber-400" size={28} /> Evaluation Leaderboard
                     </h2>
-                    <p className="text-sm text-gray-400 mt-1">
-                      Live ranked standings of evaluated teams with filters for problem statements, departments, and academic years.
+                    <p className="text-sm text-gray-400 mt-1 font-mono">
+                      Live ranked standings. Shortlist teams and click "Commit Shortlist Changes" to publish.
                     </p>
                   </div>
-                  <button
-                    onClick={handleExportLeaderboard}
-                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-5 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all shadow-sm"
-                  >
-                    <Download size={16} /> Export Leaderboard
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {pendingShortlistCount > 0 && (
+                      <button
+                        onClick={() => {
+                          setCommitCode('');
+                          setCommitError('');
+                          setCommitModalOpen(true);
+                        }}
+                        className="bg-white text-black hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all shadow-lg cursor-pointer animate-pulse"
+                      >
+                        <Lock size={15} /> Commit Shortlist Changes ({pendingShortlistCount})
+                      </button>
+                    )}
+                    <button
+                      onClick={handleExportLeaderboard}
+                      className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-5 py-2 rounded-lg text-sm font-semibold flex items-center gap-2 transition-all shadow-sm"
+                    >
+                      <Download size={14} /> Export Leaderboard
+                    </button>
+                  </div>
                 </div>
 
                 {/* Top 3 Podium Cards */}
                 {top3.length > 0 && (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                     {top3.map((item, idx) => {
                       const rank = idx + 1;
-                      const badgeBorder = rank === 1 ? 'border-amber-400/50 bg-amber-500/10' : rank === 2 ? 'border-gray-300/50 bg-gray-400/10' : 'border-amber-700/50 bg-amber-800/10';
-                      const medalColor = rank === 1 ? 'text-amber-300' : rank === 2 ? 'text-gray-100' : 'text-amber-500';
+                      const badgeBorder = rank === 1 ? 'border-amber-400/30 bg-amber-500/5' : rank === 2 ? 'border-gray-400/30 bg-white/5' : 'border-amber-700/30 bg-amber-800/5';
+                      const medalColor = rank === 1 ? 'text-amber-300' : rank === 2 ? 'text-gray-200' : 'text-amber-500';
                       const medalTitle = rank === 1 ? '1st Place 🥇' : rank === 2 ? '2nd Place 🥈' : '3rd Place 🥉';
 
                       return (
-                        <div key={item.team.id} className={`card border ${badgeBorder} relative overflow-hidden p-6 space-y-4`}>
+                        <div key={item.team.id} className={`card border ${badgeBorder} relative overflow-hidden p-5 space-y-4 rounded-2xl bg-white/[0.02]`}>
                           <div className="flex justify-between items-start">
                             <div>
-                              <span className={`text-xs font-mono font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${badgeBorder} ${medalColor}`}>
-                                {medalTitle}
-                              </span>
-                              <h4 className="text-xl font-bold text-white mt-2">{item.team.team_name}</h4>
-                              <p className="text-xs text-gray-300 mt-0.5">{item.ps?.id} • {item.team.tl_name}</p>
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[10px] font-mono font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${badgeBorder} ${medalColor}`}>
+                                  {medalTitle}
+                                </span>
+                                {item.isShortlisted && (
+                                  <span className={`text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border flex items-center gap-1 ${
+                                    item.isStaged 
+                                      ? 'border-amber-500/30 bg-amber-500/10 text-amber-400' 
+                                      : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                                  }`}>
+                                    <CheckCircle2 size={10} /> {item.isStaged ? 'Shortlisted (Draft)' : 'Shortlisted'}
+                                  </span>
+                                )}
+                              </div>
+                              <h4 
+                                className="text-lg font-bold text-white mt-2 cursor-pointer hover:underline transition-all"
+                                onClick={() => {
+                                  setSelectedTeam(item.team);
+                                  setSlotDay(item.slot.day);
+                                  setSlotSession(item.slot.session);
+                                  setSlotSessionType(item.slot.sessionType);
+                                  setSlotBatch(item.slot.batchName || getBatchFromDaySession(item.slot.day, item.slot.session));
+                                }}
+                                title="Click to view team details"
+                              >
+                                {item.team.team_name}
+                              </h4>
+                              <p className="text-[11px] text-gray-400 mt-0.5 font-mono">{item.ps?.id} • {item.team.tl_name}</p>
                             </div>
                             <div className="text-right">
-                              <span className="text-3xl font-black text-white font-mono">{item.totalScore}</span>
-                              <span className="text-xs text-gray-400 block">/ 100</span>
+                              <span className="text-2xl font-black text-emerald-400 font-mono">{item.totalScore}</span>
+                              <span className="text-[10px] text-gray-500 block font-mono">/ 100</span>
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 text-xs pt-3 border-t border-white/10 text-gray-300 font-mono">
+                          <div className="grid grid-cols-2 gap-2 text-[11px] pt-3 border-t border-white/5 text-gray-400 font-mono">
+                            <div>Batch: <strong className="text-white">Batch {item.slot.batchNumber}</strong></div>
+                            <div>Room: <strong className="text-white">{item.slot.roomNumber}</strong></div>
                             <div>Dept: <strong className="text-white">{item.team.tl_department || 'N/A'}</strong></div>
                             <div>Year: <strong className="text-white">{item.team.tl_year || 'N/A'}</strong></div>
-                            <div>Slot: <strong className="text-white">{item.slot.badgeLabel}</strong></div>
-                            <div>Room: <strong className="text-white">{item.slot.roomNumber}</strong></div>
                           </div>
                         </div>
                       );
@@ -2609,20 +4086,49 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 )}
 
                 {/* Filters & Leaderboard Table */}
-                <div className="card">
-                  <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-4 mb-6">
-                    <div className="flex flex-wrap items-center gap-4">
-                      <div className="flex items-center gap-2 text-sm font-medium text-gray-300">
-                        <Filter size={16} /> Filters:
+                <div className="card overflow-hidden p-0 border border-white/10 bg-white/[0.02]">
+                  <div className="p-5 border-b border-white/10 flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-4 bg-white/[0.01]">
+                    <div className="flex flex-wrap items-center gap-3">
+                      {/* Batch Filter */}
+                      <div className="flex flex-col">
+                        <label className="text-[11px] text-gray-400 font-medium mb-1">Batch</label>
+                        <select
+                          value={leaderboardBatch}
+                          onChange={(e) => setLeaderboardBatch(e.target.value)}
+                          className="text-xs border-white/10 rounded-lg bg-black/40 border py-1.5 px-2.5 text-gray-200 focus:border-white/30 min-w-[120px]"
+                        >
+                          <option value="All">All Batches</option>
+                          <option value="Batch 1">Batch 1</option>
+                          <option value="Batch 2">Batch 2</option>
+                          <option value="Batch 3">Batch 3</option>
+                          <option value="Batch 4">Batch 4</option>
+                          <option value="Batch 5">Batch 5</option>
+                          <option value="Batch 6">Batch 6</option>
+                        </select>
+                      </div>
+
+                      {/* Status Filter */}
+                      <div className="flex flex-col">
+                        <label className="text-[11px] text-gray-400 font-medium mb-1">Status</label>
+                        <select
+                          value={leaderboardStatus}
+                          onChange={(e) => setLeaderboardStatus(e.target.value)}
+                          className="text-xs border-white/10 rounded-lg bg-black/40 border py-1.5 px-2.5 text-gray-200 focus:border-white/30 min-w-[110px]"
+                        >
+                          <option value="All">All Status</option>
+                          <option value="Shortlisted">Shortlisted</option>
+                          <option value="Evaluated">Evaluated</option>
+                          <option value="Absent">Absent</option>
+                        </select>
                       </div>
 
                       {/* Problem Statement Filter */}
                       <div className="flex flex-col">
-                        <label className="text-xs text-gray-300 mb-1">Problem Statement</label>
+                        <label className="text-[11px] text-gray-400 font-medium mb-1">Problem Statement</label>
                         <select
                           value={leaderboardPS}
                           onChange={(e) => setLeaderboardPS(e.target.value)}
-                          className="text-sm border-white/20 rounded-md bg-black/40 backdrop-blur-xl border py-1.5 px-3 focus:ring-white/30 text-white min-w-[150px]"
+                          className="text-xs border-white/10 rounded-lg bg-black/40 border py-1.5 px-2.5 text-gray-200 focus:border-white/30 min-w-[140px]"
                         >
                           {availablePSList.map(ps => (
                             <option key={ps} value={ps}>{ps === 'All' ? 'All Statements' : ps}</option>
@@ -2632,11 +4138,11 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
 
                       {/* Department Filter */}
                       <div className="flex flex-col">
-                        <label className="text-xs text-gray-300 mb-1">Department</label>
+                        <label className="text-[11px] text-gray-400 font-medium mb-1">Department</label>
                         <select
                           value={leaderboardDept}
                           onChange={(e) => setLeaderboardDept(e.target.value)}
-                          className="text-sm border-white/20 rounded-md bg-black/40 backdrop-blur-xl border py-1.5 px-3 focus:ring-white/30 text-white min-w-[130px]"
+                          className="text-xs border-white/10 rounded-lg bg-black/40 border py-1.5 px-2.5 text-gray-200 focus:border-white/30 min-w-[120px]"
                         >
                           {availableDepts.map(d => (
                             <option key={d} value={d}>{d === 'All' ? 'All Departments' : d}</option>
@@ -2644,100 +4150,145 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                         </select>
                       </div>
 
-                      {/* Year Filter */}
+                      {/* Academic Year Filter */}
                       <div className="flex flex-col">
-                        <label className="text-xs text-gray-300 mb-1">Academic Year</label>
+                        <label className="text-[11px] text-gray-400 font-medium mb-1">Academic Year</label>
                         <select
                           value={leaderboardYear}
                           onChange={(e) => setLeaderboardYear(e.target.value)}
-                          className="text-sm border-white/20 rounded-md bg-black/40 backdrop-blur-xl border py-1.5 px-3 focus:ring-white/30 text-white min-w-[120px]"
+                          className="text-xs border-white/10 rounded-lg bg-black/40 border py-1.5 px-2.5 text-gray-200 focus:border-white/30 min-w-[100px]"
                         >
                           {availableYears.map(y => (
-                            <option key={y} value={y}>{y === 'All' ? 'All Years' : y}</option>
+                            <option key={y} value={y}>{y === 'All' ? 'All Years' : `Year ${y}`}</option>
                           ))}
                         </select>
                       </div>
                     </div>
 
                     {/* Search Bar */}
-                    <div className="relative min-w-[240px]">
-                      <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <div className="relative min-w-[220px]">
+                      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
                       <input
                         type="text"
                         placeholder="Search team, TL or PS..."
                         value={leaderboardSearch}
                         onChange={(e) => setLeaderboardSearch(e.target.value)}
-                        className="w-full text-sm pl-9 pr-3 py-1.5 border border-white/20 rounded-md bg-black/40 text-white placeholder-gray-500 focus:border-white/30"
+                        className="w-full text-xs pl-8 pr-3 py-1.5 border border-white/10 rounded-lg bg-black/40 text-white placeholder-gray-500 focus:border-white/30"
                       />
                     </div>
                   </div>
 
                   {/* Ranked Table */}
                   <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
+                    <table className="w-full text-left border-collapse text-xs">
                       <thead>
-                        <tr className="border-b border-white/10 text-gray-300 text-sm bg-black/20 font-semibold">
-                          <th className="p-4 w-16 text-center">Rank</th>
-                          <th className="p-4">Team Details</th>
-                          <th className="p-4">PS & Slot</th>
-                          <th className="p-4">Dept & Year</th>
-                          <th className="p-4 text-center">Breakdown (25 each)</th>
-                          <th className="p-4 text-center">Total Score</th>
+                        <tr className="border-b border-white/10 text-gray-400 text-xs font-semibold uppercase tracking-wider bg-white/[0.02]">
+                          <th className="p-3.5 w-12 text-center">#</th>
+                          <th className="p-3.5">Team & Presentation Info</th>
+                          <th className="p-3.5">Problem Statement</th>
+                          <th className="p-3.5">Leader Details</th>
+                          <th className="p-3.5 text-center">Category Breakdown</th>
+                          <th className="p-3.5 text-center">Total Score (100)</th>
+                          <th className="p-3.5 text-right">Action</th>
                         </tr>
                       </thead>
                       <tbody>
                         {ranked.map((item, index) => {
-                          const isTop1 = index === 0 && item.totalScore !== null;
-                          const isTop2 = index === 1 && item.totalScore !== null;
-                          const isTop3 = index === 2 && item.totalScore !== null;
-
+                          const rank = index + 1;
                           return (
-                            <tr key={item.team.id} className="border-b border-white/10 hover:bg-black/20 transition-colors">
-                              <td className="p-4 text-center">
-                                {isTop1 ? (
-                                  <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 text-xs font-mono">🥇 #1</span>
-                                ) : isTop2 ? (
-                                  <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-full bg-gray-400/20 text-gray-200 font-bold border border-gray-400/30 text-xs font-mono">🥈 #2</span>
-                                ) : isTop3 ? (
-                                  <span className="inline-flex items-center justify-center px-2.5 py-1 rounded-full bg-amber-700/20 text-amber-500 font-bold border border-amber-700/30 text-xs font-mono">🥉 #3</span>
+                            <tr key={item.team.id} className="border-b border-white/5 hover:bg-white/[0.02] transition-colors">
+                              <td className="p-3.5 text-center font-mono text-gray-500">
+                                {item.isAbsent ? (
+                                  <span className="text-gray-600">-</span>
+                                ) : item.totalScore !== null ? (
+                                  <span className={`font-bold ${rank === 1 ? 'text-amber-400' : rank === 2 ? 'text-gray-300' : rank === 3 ? 'text-amber-600' : 'text-gray-400'}`}>
+                                    {rank}
+                                  </span>
                                 ) : (
-                                  <span className="font-mono text-sm text-gray-400 font-semibold">#{index + 1}</span>
+                                  <span className="text-gray-600">-</span>
                                 )}
                               </td>
-                              <td className="p-4 text-sm">
-                                <p className="font-bold text-white text-base">{item.team.team_name}</p>
-                                <p className="text-xs text-gray-300 mt-0.5">Leader: <span className="font-medium text-white">{item.team.tl_name}</span> ({item.team.tl_email})</p>
+                              <td className="p-3.5">
+                                <p 
+                                  className="font-bold text-white text-sm cursor-pointer hover:underline"
+                                  onClick={() => {
+                                    setSelectedTeam(item.team);
+                                    setSlotDay(item.slot.day);
+                                    setSlotSession(item.slot.session);
+                                    setSlotSessionType(item.slot.sessionType);
+                                    setSlotBatch(item.slot.batchName || getBatchFromDaySession(item.slot.day, item.slot.session));
+                                  }}
+                                  title="Click to view team details"
+                                >
+                                  {item.team.team_name}
+                                </p>
+                                <p className="text-[11px] text-gray-400 mt-0.5 font-mono">
+                                  Batch {item.slot.batchNumber} • Room {item.slot.roomNumber}
+                                </p>
                               </td>
-                              <td className="p-4 text-sm">
-                                <span className="font-bold text-white text-base">{item.ps?.id || 'N/A'}</span>
-                                <div className="text-xs text-gray-300 font-mono mt-0.5">
-                                  {item.slot.day} • {item.slot.trackName}
-                                </div>
-                                <div className="text-[11px] text-gray-400 font-mono mt-0.5">
-                                  PPT: Room {item.slot.pptRoom} | Proto: Room {item.slot.protoRoom}
-                                </div>
+                              <td className="p-3.5 font-mono text-xs text-white">
+                                <span className="font-semibold">{item.ps?.id || item.team.allocated_ps_id || 'N/A'}</span>
+                                {item.ps?.title && <span className="text-gray-400 block text-[11px] truncate max-w-[200px]">{item.ps.title}</span>}
                               </td>
-                              <td className="p-4 text-sm font-mono">
-                                <span className="text-white font-semibold">{item.team.tl_department || '-'}</span>
-                                <span className="text-gray-400 block text-xs">{item.team.tl_year || '-'}</span>
+                              <td className="p-3.5">
+                                <p className="text-gray-300 font-medium">{item.team.tl_name || '-'}</p>
+                                <p className="text-[11px] text-gray-400 font-mono">{item.team.tl_department || 'N/A'} • {item.team.tl_year || 'N/A'}</p>
                               </td>
-                              <td className="p-4 text-xs font-mono text-center text-gray-300">
-                                {item.evalData ? (
-                                  <div className="flex justify-center gap-2">
-                                    <span>C1: <strong>{item.evalData.cat1_score}</strong></span>
-                                    <span>C2: <strong>{item.evalData.cat2_score}</strong></span>
-                                    <span>C3: <strong>{item.evalData.cat3_score}</strong></span>
-                                    <span>C4: <strong>{item.evalData.cat4_score}</strong></span>
+                              <td className="p-3.5 text-center font-mono text-[11px] text-gray-400">
+                                {item.isAbsent ? (
+                                  <span className="text-rose-400 font-semibold italic">Absent</span>
+                                ) : item.evalData ? (
+                                  <div className="flex justify-center gap-2.5">
+                                    <span>C1: <strong className="text-white">{item.evalData.cat1_score}</strong></span>
+                                    <span>C2: <strong className="text-white">{item.evalData.cat2_score}</strong></span>
+                                    <span>C3: <strong className="text-white">{item.evalData.cat3_score}</strong></span>
+                                    <span>C4: <strong className="text-white">{item.evalData.cat4_score}</strong></span>
                                   </div>
                                 ) : (
-                                  <span className="text-gray-500 italic">Not Evaluated</span>
+                                  <span className="text-gray-600 italic">Not Evaluated</span>
                                 )}
                               </td>
-                              <td className="p-4 text-sm text-center">
-                                {item.totalScore !== null ? (
-                                  <span className="font-black text-green-400 text-xl font-mono">{item.totalScore}</span>
+                              <td className="p-3.5 text-center font-mono">
+                                {item.isAbsent ? (
+                                  <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20 text-rose-400 font-bold text-xs font-mono">Absent</span>
+                                ) : item.totalScore !== null ? (
+                                  <span className="font-bold text-emerald-400 text-sm">{item.totalScore}</span>
                                 ) : (
-                                  <span className="text-gray-500 font-mono">-</span>
+                                  <span className="text-gray-600">-</span>
+                                )}
+                              </td>
+                              <td className="p-3.5 text-right">
+                                {item.isShortlisted ? (
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleStageShortlistToggle(item.team.id, item.evalData);
+                                    }}
+                                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-all inline-flex items-center gap-1.5 ml-auto cursor-pointer ${
+                                      item.isStaged
+                                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
+                                        : 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30'
+                                    }`}
+                                    title={item.isStaged ? "Staged for Shortlist (Pending Commit)" : "Currently Shortlisted in Database"}
+                                  >
+                                    <CheckCircle2 size={13} className="text-emerald-400" />
+                                    {item.isStaged ? 'Shortlisted (Draft)' : 'Shortlisted'}
+                                  </button>
+                                ) : (
+                                  <button 
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleStageShortlistToggle(item.team.id, item.evalData);
+                                    }}
+                                    className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-all inline-flex items-center gap-1.5 ml-auto cursor-pointer ${
+                                      item.isStaged
+                                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                                        : 'bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white border border-white/10'
+                                    }`}
+                                    title={item.isStaged ? "Staged for Removal (Pending Commit)" : "Click to stage for shortlisting"}
+                                  >
+                                    {item.isStaged ? 'Removed (Draft)' : '+ Shortlist'}
+                                  </button>
                                 )}
                               </td>
                             </tr>
@@ -2745,8 +4296,232 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                         })}
                         {ranked.length === 0 && (
                           <tr>
-                            <td colSpan={6} className="p-8 text-center text-gray-400">
+                            <td colSpan={7} className="p-8 text-center text-gray-400">
                               No teams matched the selected leaderboard filters.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </motion.div>
+            );
+          })()}
+
+          {activeTab === 'shortlisted' && (() => {
+            const shortlistedTeams = teams.filter(t => {
+              const evalData = evaluations.find(e => e.team_id === t.id);
+              if (!getEffectiveShortlistStatus(t.id, evalData)) return false;
+              const ps = problemStatements.find(p => isPSMatch(p.id, t.allocated_ps_id));
+
+              if (shortlistPS !== 'All' && !isPSMatch(ps?.id || t.allocated_ps_id, shortlistPS)) return false;
+              if (shortlistDept !== 'All' && t.tl_department !== shortlistDept) return false;
+              if (shortlistSearch) {
+                const query = shortlistSearch.toLowerCase().trim();
+                const matchesName = (t.team_name || '').toLowerCase().includes(query);
+                const matchesTL = (t.tl_name || '').toLowerCase().includes(query) || (t.tl_email || '').toLowerCase().includes(query);
+                const matchesPS = (ps?.id || t.allocated_ps_id || '').toLowerCase().includes(query);
+                if (!matchesName && !matchesTL && !matchesPS) return false;
+              }
+              return true;
+            });
+
+            const totalShortlistedCount = teams.filter(t => {
+              const evalData = evaluations.find(e => e.team_id === t.id);
+              return getEffectiveShortlistStatus(t.id, evalData);
+            }).length;
+
+            return (
+              <motion.div
+                key="shortlisted"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                transition={{ duration: 0.3, ease: "circOut" }}
+                className="space-y-6"
+              >
+                {/* Header & Export Options */}
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div>
+                    <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                      <Award className="text-white" size={28} /> Shortlisted Teams
+                    </h2>
+                    <p className="text-sm text-gray-400 mt-1 font-mono">
+                      Teams shortlisted for the further round of Code Storm 2026 ({totalShortlistedCount} total shortlisted)
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    {pendingShortlistCount > 0 && (
+                      <button
+                        onClick={() => {
+                          setCommitCode('');
+                          setCommitError('');
+                          setCommitModalOpen(true);
+                        }}
+                        className="bg-white text-black hover:bg-gray-200 px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all shadow-lg cursor-pointer animate-pulse"
+                      >
+                        <Lock size={14} /> Commit Changes ({pendingShortlistCount})
+                      </button>
+                    )}
+                    <button
+                      onClick={handleExportAllShortlisted}
+                      className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all shadow-sm cursor-pointer"
+                      title="Export all shortlisted teams across all statements"
+                    >
+                      <Download size={14} /> Export All Shortlisted
+                    </button>
+                    <button
+                      onClick={handleExportStatementWiseShortlisted}
+                      className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all shadow-sm cursor-pointer"
+                      title="Export multi-sheet Excel with individual sheets per statement"
+                    >
+                      <Layers size={14} /> Export Statement-Wise
+                    </button>
+                  </div>
+                </div>
+
+                {/* Filter bar and Table Container */}
+                <div className="card overflow-hidden p-0 border border-white/10 bg-white/[0.02]">
+                  <div className="p-5 border-b border-white/10 flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-4 bg-white/[0.01]">
+                    <div className="flex flex-wrap items-center gap-3">
+                      {/* Problem Statement Filter */}
+                      <div className="flex flex-col">
+                        <label className="text-[11px] text-gray-400 font-medium mb-1">Problem Statement</label>
+                        <select 
+                          value={shortlistPS} 
+                          onChange={e => setShortlistPS(e.target.value)} 
+                          className="text-xs border-white/10 rounded-lg bg-black/40 border py-1.5 px-2.5 text-gray-200 focus:border-white/30 min-w-[140px]"
+                        >
+                          <option value="All">All Statements</option>
+                          {allocatedProblemStatements.filter(p => p !== 'All').map(ps => (
+                            <option key={ps} value={ps}>{ps}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Department Filter */}
+                      <div className="flex flex-col">
+                        <label className="text-[11px] text-gray-400 font-medium mb-1">Department</label>
+                        <select 
+                          value={shortlistDept} 
+                          onChange={e => setShortlistDept(e.target.value)} 
+                          className="text-xs border-white/10 rounded-lg bg-black/40 border py-1.5 px-2.5 text-gray-200 focus:border-white/30 min-w-[120px]"
+                        >
+                          <option value="All">All Departments</option>
+                          {Array.from(new Set(teams.map(t => t.tl_department).filter(Boolean))).sort().map(d => (
+                            <option key={d} value={d}>{d}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Search Bar */}
+                    <div className="relative min-w-[220px]">
+                      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                      <input
+                        type="text"
+                        placeholder="Search team, TL or PS..."
+                        value={shortlistSearch}
+                        onChange={(e) => setShortlistSearch(e.target.value)}
+                        className="w-full text-xs pl-8 pr-3 py-1.5 border border-white/10 rounded-lg bg-black/40 text-white placeholder-gray-500 focus:border-white/30"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-white/10 text-gray-400 text-xs font-semibold uppercase tracking-wider bg-white/[0.02]">
+                          <th className="p-3.5 w-12 text-center">#</th>
+                          <th className="p-3.5">Team Details</th>
+                          <th className="p-3.5">Problem Statement</th>
+                          <th className="p-3.5 text-center">Score (100)</th>
+                          <th className="p-3.5 text-center">Status</th>
+                          <th className="p-3.5 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shortlistedTeams.map((team, index) => {
+                          const ps = problemStatements.find(p => isPSMatch(p.id, team.allocated_ps_id));
+                          const evaluation = evaluations.find(e => e.team_id === team.id);
+                          const slot = getTeamSlotInfo(team);
+                          const isStaged = isTeamDraftChanged(team.id, evaluation);
+
+                          return (
+                            <tr 
+                              key={team.id} 
+                              onClick={() => {
+                                setSelectedTeam(team);
+                                setSlotDay(slot.day);
+                                setSlotSession(slot.session);
+                                setSlotSessionType(slot.sessionType);
+                                setSlotBatch(slot.batchName || getBatchFromDaySession(slot.day, slot.session));
+                              }}
+                              className="border-b border-white/5 hover:bg-white/[0.04] transition-colors cursor-pointer"
+                            >
+                              <td className="p-3.5 text-center text-gray-500 font-mono text-xs">{index + 1}</td>
+                              <td className="p-3.5">
+                                <p className="font-semibold text-white text-sm hover:underline">
+                                  {team.team_name}
+                                </p>
+                                <p className="text-[11px] text-gray-400 mt-0.5 font-mono">{team.tl_name} ({team.tl_email})</p>
+                              </td>
+                              <td className="p-3.5 font-mono text-xs font-semibold text-white">
+                                {ps?.id || team.allocated_ps_id || 'N/A'}{ps?.title ? ` • ${ps.title}` : ''}
+                              </td>
+                              <td className="p-3.5 text-center font-mono">
+                                {evaluation ? (
+                                  <span className="font-bold text-white text-sm">{evaluation.total_score}</span>
+                                ) : (
+                                  <span className="text-gray-600">-</span>
+                                )}
+                              </td>
+                              <td className="p-3.5 text-center">
+                                <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold border ${
+                                  isStaged
+                                    ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                    : 'bg-white/10 text-white border-white/15'
+                                }`}>
+                                  <CheckCircle2 size={12} /> {isStaged ? 'Shortlisted (Draft)' : 'Shortlisted'}
+                                </span>
+                              </td>
+                              <td className="p-3.5 text-right">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleStageShortlistToggle(team.id, evaluation);
+                                  }}
+                                  className="bg-white/5 hover:bg-red-500/20 text-gray-300 hover:text-red-300 border border-white/10 hover:border-red-500/20 px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer"
+                                  title="Remove from shortlisted teams"
+                                >
+                                  Remove
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+
+                        {shortlistedTeams.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="p-12 text-center text-gray-400 space-y-3">
+                              <div className="w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center mx-auto text-gray-400">
+                                <Award size={24} />
+                              </div>
+                              <p className="text-sm font-semibold text-gray-300">
+                                {totalShortlistedCount === 0 ? 'No teams have been shortlisted yet.' : 'No shortlisted teams match your filter.'}
+                              </p>
+                              <p className="text-xs text-gray-500 max-w-sm mx-auto">
+                                Go to the Leaderboard tab and click Shortlist on any team to add them.
+                              </p>
+                              {totalShortlistedCount === 0 && (
+                                <button
+                                  onClick={() => setActiveTab('leaderboard')}
+                                  className="mt-2 btn-secondary text-xs px-4 py-2 cursor-pointer"
+                                >
+                                  Go to Leaderboard →
+                                </button>
+                              )}
                             </td>
                           </tr>
                         )}
@@ -2771,12 +4546,79 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
               </button>
             </div>
             
-            <div className="p-6 space-y-6">
+            <div className="p-6 space-y-6 max-h-[80vh] overflow-y-auto">
               <div>
                 <h4 className="text-2xl font-bold text-white mb-1">{selectedTeam.team_name}</h4>
-                <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-white/10 text-gray-200 border border-white/10">
-                  {selectedTeam.allocated_ps_id ? `Allocated: ${selectedTeam.allocated_ps_id}` : 'Selection Pending'}
-                </div>
+                {(() => {
+                  const psObj = problemStatements.find(p => isPSMatch(p.id, selectedTeam.allocated_ps_id));
+                  const selSlot = getTeamSlotInfo(selectedTeam);
+                  const evalData = evaluations.find(e => e.team_id === selectedTeam.id);
+                  const isAbsent = Boolean(evalData?.scores?.is_absent || evalData?.is_absent);
+
+                  return (
+                    <div className="space-y-2.5 mt-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-white/10 text-white border border-white/10">
+                          {selectedTeam.allocated_ps_id ? `PS: ${selectedTeam.allocated_ps_id}` : 'PS: Pending'}
+                        </span>
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                          Batch {selSlot.batchNumber || '-'} ({selSlot.batchName})
+                        </span>
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono font-medium bg-white/5 text-gray-300 border border-white/10">
+                          Room {selSlot.roomNumber}
+                        </span>
+                        {isAbsent ? (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                            ABSENT
+                          </span>
+                        ) : evalData ? (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                            Score: {evalData.total_score} / 100
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono text-gray-400 bg-white/5 border border-white/10">
+                            Evaluation Pending
+                          </span>
+                        )}
+                      </div>
+
+                      {psObj && (
+                        <div className="bg-white/[0.03] p-3 rounded-xl border border-white/10 text-xs">
+                          <p className="text-white font-semibold flex items-center gap-2">
+                            <span className="font-mono text-amber-400 font-bold">{psObj.id}:</span>
+                            {psObj.title}
+                          </p>
+                          {psObj.description && (
+                            <p className="text-gray-400 text-[11px] mt-1 line-clamp-2 leading-relaxed">
+                              {psObj.description}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {evalData && !isAbsent && (
+                        <div className="bg-white/[0.02] p-3 rounded-xl border border-white/5 text-xs grid grid-cols-4 gap-2 text-center font-mono">
+                          <div className="bg-black/30 p-2 rounded-lg border border-white/5">
+                            <p className="text-[10px] text-gray-400">{getCategoryName(0)}</p>
+                            <p className="font-bold text-white text-sm mt-0.5">{evalData.cat1_score}</p>
+                          </div>
+                          <div className="bg-black/30 p-2 rounded-lg border border-white/5">
+                            <p className="text-[10px] text-gray-400">{getCategoryName(1)}</p>
+                            <p className="font-bold text-white text-sm mt-0.5">{evalData.cat2_score}</p>
+                          </div>
+                          <div className="bg-black/30 p-2 rounded-lg border border-white/5">
+                            <p className="text-[10px] text-gray-400">{getCategoryName(2)}</p>
+                            <p className="font-bold text-white text-sm mt-0.5">{evalData.cat3_score}</p>
+                          </div>
+                          <div className="bg-black/30 p-2 rounded-lg border border-white/5">
+                            <p className="text-[10px] text-gray-400">{getCategoryName(3)}</p>
+                            <p className="font-bold text-white text-sm mt-0.5">{evalData.cat4_score}</p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="bg-blue-500/10 rounded-xl p-4 border border-blue-500/20">
@@ -2805,115 +4647,49 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 </div>
               </div>
 
-              {/* Presentation Slot & Batch Assignment */}
-              <div className="bg-white/5 rounded-xl p-4 border border-white/10 space-y-3">
-                <div className="flex justify-between items-center">
-                  <h5 className="text-xs font-bold text-gray-300 uppercase tracking-wider">Presentation Slot & Batch</h5>
-                  <span className="text-xs font-mono font-bold bg-white/10 text-white border border-white/10 px-2 py-0.5 rounded">
-                    {slotBatch || getBatchFromDaySession(slotDay, slotSession)} • {slotSessionType}
-                  </span>
-                </div>
+              {/* Shortlist Status Toggle Card */}
+              {(() => {
+                const evalData = evaluations.find(e => e.team_id === selectedTeam.id);
+                const isShortlisted = getEffectiveShortlistStatus(selectedTeam.id, evalData);
+                const isStaged = isTeamDraftChanged(selectedTeam.id, evalData);
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] text-gray-400 mb-1 font-medium">Assign Batch</label>
-                    <select
-                      value={slotBatch || getBatchFromDaySession(slotDay, slotSession)}
-                      onChange={(e) => {
-                        const selBatch = e.target.value;
-                        setSlotBatch(selBatch);
-                        if (selBatch.startsWith('Day 1')) {
-                          setSlotDay('31st August');
-                          setSlotSession(selBatch.includes('AN') ? 'AN' : 'FN');
-                        } else if (selBatch.startsWith('Day 2')) {
-                          setSlotDay('1st September');
-                          setSlotSession(selBatch.includes('AN') ? 'AN' : 'FN');
-                        } else if (selBatch.startsWith('Day 3')) {
-                          setSlotDay('2nd September');
-                          setSlotSession(selBatch.includes('AN') ? 'AN' : 'FN');
-                        }
-                      }}
-                      className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
+                return (
+                  <div className={`p-4 rounded-xl border flex items-center justify-between gap-3 ${
+                    isShortlisted ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-white/[0.02] border-white/10'
+                  }`}>
+                    <div className="flex items-center gap-2.5">
+                      <div className={`p-2 rounded-lg ${isShortlisted ? 'bg-emerald-500/20 text-emerald-400' : 'bg-white/5 text-gray-400'}`}>
+                        <Award size={18} />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-white">Next Round Shortlist Status</p>
+                        <p className="text-[11px] text-gray-400">
+                          {isShortlisted 
+                            ? isStaged ? 'Staged to Shortlist (Pending Master Code Commit)' : 'Team is Shortlisted for Further Round'
+                            : isStaged ? 'Staged to Remove (Pending Master Code Commit)' : 'Team is not shortlisted yet'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleStageShortlistToggle(selectedTeam.id, evalData)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
+                        isShortlisted 
+                          ? isStaged
+                            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30'
+                            : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30' 
+                          : isStaged
+                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30'
+                            : 'bg-white/10 text-white border-white/20 hover:bg-white/20'
+                      }`}
                     >
-                      <option value="Day 1 - FN">Batch 1: Day 1 - FN (31st Aug Morning)</option>
-                      <option value="Day 1 - AN">Batch 2: Day 1 - AN (31st Aug Afternoon)</option>
-                      <option value="Day 2 - FN">Batch 3: Day 2 - FN (1st Sept Morning)</option>
-                      <option value="Day 2 - AN">Batch 4: Day 2 - AN (1st Sept Afternoon)</option>
-                      <option value="Day 3 - FN">Batch 5: Day 3 - FN (2nd Sept Morning)</option>
-                      <option value="Day 3 - AN">Batch 6: Day 3 - AN (2nd Sept Afternoon)</option>
-                    </select>
+                      {isShortlisted 
+                        ? (isStaged ? 'Shortlisted (Draft)' : '✓ Shortlisted')
+                        : (isStaged ? 'Removed (Draft)' : '+ Shortlist Team')}
+                    </button>
                   </div>
-                  <div>
-                    <label className="block text-[11px] text-gray-400 mb-1 font-medium">Session Mode</label>
-                    <select
-                      value={slotSessionType}
-                      onChange={(e) => setSlotSessionType(e.target.value)}
-                      className="w-full text-xs py-1.5 px-2 border border-white/20 rounded-lg bg-black/40 text-white"
-                    >
-                      <option value="PPT">PPT Presentation</option>
-                      <option value="Prototype">Prototype Evaluation</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="flex justify-end pt-1">
-                  <button
-                    disabled={savingSlot}
-                    onClick={async () => {
-                      setSavingSlot(true);
-                      try {
-                        const targetBatch = slotBatch || getBatchFromDaySession(slotDay, slotSession);
-                        let targetDay = slotDay;
-                        let targetSession = slotSession;
-                        if (targetBatch.startsWith('Day 1')) {
-                          targetDay = '31st August';
-                          targetSession = targetBatch.includes('AN') ? 'AN' : 'FN';
-                        } else if (targetBatch.startsWith('Day 2')) {
-                          targetDay = '1st September';
-                          targetSession = targetBatch.includes('AN') ? 'AN' : 'FN';
-                        } else if (targetBatch.startsWith('Day 3')) {
-                          targetDay = '2nd September';
-                          targetSession = targetBatch.includes('AN') ? 'AN' : 'FN';
-                        }
-
-                        const { error } = await supabase.from('teams').update({
-                          presentation_day: targetDay,
-                          session: targetSession,
-                          session_type: slotSessionType,
-                          batch: targetBatch
-                        }).eq('id', selectedTeam.id);
-
-                        if (error) {
-                          alert("Error saving slot: " + error.message);
-                        } else {
-                          alert("Presentation slot updated successfully!");
-                          setTeams(teams.map(t => t.id === selectedTeam.id ? {
-                            ...t,
-                            presentation_day: targetDay,
-                            session: targetSession,
-                            session_type: slotSessionType,
-                            batch: targetBatch
-                          } : t));
-                          setSelectedTeam({
-                            ...selectedTeam,
-                            presentation_day: targetDay,
-                            session: targetSession,
-                            session_type: slotSessionType,
-                            batch: targetBatch
-                          });
-                        }
-                      } catch (err: any) {
-                        alert("Error saving slot: " + err.message);
-                      } finally {
-                        setSavingSlot(false);
-                      }
-                    }}
-                    className="bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10 text-xs font-semibold py-1.5 px-4 rounded-lg transition-all"
-                  >
-                    {savingSlot ? 'Saving Batch...' : 'Save Presentation Batch'}
-                  </button>
-                </div>
-              </div>
+                );
+              })()}
 
               {selectedTeam.members && selectedTeam.members.length > 0 && (
                 <div>
@@ -2930,43 +4706,131 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
               )}
             </div>
             
-            <div className="px-6 py-4 border-t border-white/10 bg-white/5/50 flex justify-between">
-              <div className="flex flex-wrap items-center gap-2">
-                <button onClick={() => { 
-                  setModalType('edit-team'); 
-                  setNewTeam({ team_name: selectedTeam.team_name, tl_email: selectedTeam.tl_email }); 
-                  setModalOpen(true); 
-                }} className="btn-secondary text-sm">Edit</button>
-                <button 
-                  onClick={async () => {
-                    const isDisabling = !selectedTeam.is_disabled;
-                    const confirmMsg = isDisabling 
-                      ? `Are you sure you want to disable "${selectedTeam.team_name}"? They will not be able to opt for problem statements and will be hidden from evaluations.`
-                      : `Are you sure you want to re-enable "${selectedTeam.team_name}"?`;
-                    if (window.confirm(confirmMsg)) {
-                      const { error } = await supabase.from('teams').update({ is_disabled: isDisabling }).eq('id', selectedTeam.id);
-                      if (error) {
-                        alert("Error updating team: " + error.message);
-                      } else {
-                        alert(`Team successfully ${isDisabling ? 'disabled' : 'enabled'}!`);
-                        setSelectedTeam({ ...selectedTeam, is_disabled: isDisabling });
-                        fetchTeams();
-                      }
-                    }
-                  }}
-                  className={`btn-secondary text-sm ${selectedTeam.is_disabled ? 'text-green-400 border-green-500/30 hover:bg-green-500/10' : 'text-amber-400 border-amber-500/30 hover:bg-amber-500/10'}`}
-                >
-                  {selectedTeam.is_disabled ? 'Enable Team' : 'Disable Team'}
-                </button>
-                <button onClick={() => { 
-                  setModalType('delete-team'); 
-                  setModalOpen(true); 
-                }} className="btn-secondary text-sm text-red-400 border-red-500/30 hover:bg-red-500/10">Delete</button>
-              </div>
-              <button onClick={() => setSelectedTeam(null)} className="btn-secondary text-sm">
+            <div className="px-6 py-4 border-t border-white/10 bg-white/5/50 flex justify-end">
+              <button 
+                type="button" 
+                onClick={() => setSelectedTeam(null)} 
+                className="btn-secondary text-sm px-6 py-2 cursor-pointer"
+              >
                 Close
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Shortlist Commit Master Code Authorization Modal */}
+      {commitModalOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="card w-full max-w-md border border-white/15 bg-black/90 backdrop-blur-2xl shadow-2xl overflow-hidden rounded-2xl">
+            <div className="px-6 py-4 border-b border-white/10 flex justify-between items-center bg-white/[0.02]">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="text-white" size={20} />
+                <h3 className="text-base font-bold text-white">Commit Shortlist Changes</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCommitModalOpen(false);
+                  setCommitCode('');
+                  setCommitError('');
+                }}
+                className="text-gray-400 hover:text-white transition-colors p-1 rounded-full hover:bg-white/10 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCommitShortlistChanges} className="p-6 space-y-4">
+              <div className="bg-white/[0.03] p-4 rounded-xl border border-white/10 space-y-2">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="text-gray-400">Pending Changes:</span>
+                  <span className="font-mono font-bold px-2.5 py-0.5 rounded text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    {pendingShortlistCount} Team{pendingShortlistCount > 1 ? 's' : ''} Staged
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-400 leading-relaxed pt-1">
+                  You are about to permanently save and publish all shortlisted teams to the database. Participants checking their status will see this live.
+                </p>
+              </div>
+
+              <div className="space-y-1.5 pt-1">
+                <label className="text-xs text-gray-300 font-medium block">
+                  Enter Master Admin Code to Confirm (INDUS):
+                </label>
+                <div className="relative">
+                  <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="password"
+                    autoFocus
+                    placeholder="Enter INDUS..."
+                    value={commitCode}
+                    onChange={(e) => {
+                      setCommitCode(e.target.value);
+                      setCommitError('');
+                    }}
+                    className="w-full pl-10 pr-4 py-2.5 text-sm bg-black/60 border border-white/15 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:border-white/30 font-mono"
+                  />
+                </div>
+              </div>
+
+              {commitError && (
+                <p className="text-xs text-red-400 bg-red-500/10 p-2.5 rounded-lg border border-red-500/20 text-center">
+                  {commitError}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-2.5 pt-3 border-t border-white/10">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCommitModalOpen(false);
+                    setCommitCode('');
+                    setCommitError('');
+                  }}
+                  className="btn-secondary text-xs px-4 py-2 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={committingBatch || !commitCode.trim()}
+                  className="btn-primary text-xs px-5 py-2 font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {committingBatch ? 'Saving & Publishing...' : 'Confirm & Publish'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Bottom Bar when there are pending shortlist changes */}
+      {pendingShortlistCount > 0 && (
+        <div className="fixed bottom-6 right-6 z-50 bg-black/90 backdrop-blur-xl border border-white/20 p-4 rounded-2xl shadow-2xl flex items-center gap-4 animate-in slide-in-from-bottom-5">
+          <div className="flex items-center gap-2 text-amber-400">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+            <span className="text-xs font-bold font-mono text-white">
+              {pendingShortlistCount} Unsaved Shortlist Change{pendingShortlistCount > 1 ? 's' : ''}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setDraftShortlistMap({})}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 transition-colors cursor-pointer"
+            >
+              Discard
+            </button>
+            <button 
+              onClick={() => {
+                setCommitCode('');
+                setCommitError('');
+                setCommitModalOpen(true);
+              }}
+              className="px-4 py-1.5 rounded-lg text-xs font-bold text-black bg-white hover:bg-gray-200 transition-all flex items-center gap-1.5 shadow-lg cursor-pointer"
+            >
+              <Lock size={13} /> Commit Changes
+            </button>
           </div>
         </div>
       )}
@@ -3403,7 +5267,6 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 const c4 = Number(evalScores.cat4) || 0;
                 const total = c1 + c2 + c3 + c4;
                 
-
                 const existingEval = evaluations.find(e => e.team_id === teamToEvaluate.id);
                 const evalData = {
                   team_id: teamToEvaluate.id,
@@ -3412,11 +5275,12 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                   cat3_score: c3,
                   cat4_score: c4,
                   total_score: total,
+                  scores: { ...(existingEval?.scores || {}), is_absent: false },
                   evaluated_by: session.user.email,
-                  update_count: existingEval ? (existingEval.update_count || 0) + 1 : 1
+                  update_count: existingEval ? (existingEval.update_count || 0) + 1 : 1,
+                  evaluated_at: new Date().toISOString()
                 };
 
-                
                 const { error } = await supabase.from('evaluations').upsert(evalData, { onConflict: 'team_id' });
                 
                 setSavingEval(false);
@@ -3425,32 +5289,71 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 } else {
                   alert("Evaluation saved successfully!");
                   setEvalModalOpen(false);
-                  fetchEvalData(); // Refresh data
+                  fetchEvalData();
                 }
               }} 
               className="p-6"
             >
               <div className="space-y-4 mb-6">
-                <p className="text-sm text-gray-300 mb-2">Assign marks out of 25 for each category.</p>
+                <div className="flex justify-between items-center mb-1">
+                  <p className="text-xs text-gray-300">Assign marks out of 25 for each category.</p>
+                  {teamToEvaluate && evaluations.find(e => e.team_id === teamToEvaluate.id)?.scores?.is_absent && (
+                    <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/20 text-rose-400 font-bold text-xs font-mono">
+                      Currently ABSENT
+                    </span>
+                  )}
+                </div>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
                   <label className="text-sm font-semibold text-white">{getCategoryName(0)}</label>
-                  <input type="number" min="0" max="25" required value={evalScores.cat1 ?? 0} onChange={e => setEvalScores({...evalScores, cat1: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
+                  <input 
+                    type="number" 
+                    min="0" 
+                    max="25" 
+                    placeholder="0"
+                    value={evalScores.cat1 ?? ''} 
+                    onChange={e => setEvalScores({...evalScores, cat1: e.target.value})} 
+                    className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" 
+                  />
                 </div>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
                   <label className="text-sm font-semibold text-white">{getCategoryName(1)}</label>
-                  <input type="number" min="0" max="25" required value={evalScores.cat2 ?? 0} onChange={e => setEvalScores({...evalScores, cat2: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
+                  <input 
+                    type="number" 
+                    min="0" 
+                    max="25" 
+                    placeholder="0"
+                    value={evalScores.cat2 ?? ''} 
+                    onChange={e => setEvalScores({...evalScores, cat2: e.target.value})} 
+                    className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" 
+                  />
                 </div>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
                   <label className="text-sm font-semibold text-white">{getCategoryName(2)}</label>
-                  <input type="number" min="0" max="25" required value={evalScores.cat3 ?? 0} onChange={e => setEvalScores({...evalScores, cat3: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
+                  <input 
+                    type="number" 
+                    min="0" 
+                    max="25" 
+                    placeholder="0"
+                    value={evalScores.cat3 ?? ''} 
+                    onChange={e => setEvalScores({...evalScores, cat3: e.target.value})} 
+                    className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" 
+                  />
                 </div>
                 
                 <div className="flex justify-between items-center bg-black/20 p-3 rounded-lg border border-white/5">
                   <label className="text-sm font-semibold text-white">{getCategoryName(3)}</label>
-                  <input type="number" min="0" max="25" required value={evalScores.cat4 ?? 0} onChange={e => setEvalScores({...evalScores, cat4: e.target.value as any})} className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" />
+                  <input 
+                    type="number" 
+                    min="0" 
+                    max="25" 
+                    placeholder="0"
+                    value={evalScores.cat4 ?? ''} 
+                    onChange={e => setEvalScores({...evalScores, cat4: e.target.value})} 
+                    className="w-20 text-center py-1.5 px-2 bg-black/40 border border-white/20 rounded focus:border-white/30 text-white font-bold" 
+                  />
                 </div>
                 
                 <div className="flex justify-between items-center pt-4 border-t border-white/10 mt-2">
@@ -3461,18 +5364,31 @@ export default function AdminDashboard({ session }: AdminDashboardProps) {
                 </div>
               </div>
               
-              <div className="flex justify-end items-center gap-3">
-                <button type="button" onClick={() => setEvalModalOpen(false)} className="btn-secondary text-sm">Cancel</button>
+              <div className="flex flex-wrap justify-between items-center gap-3">
                 <button 
                   type="button" 
-                  onClick={() => handleDeleteMarks(teamToEvaluate.id)} 
-                  className="bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30 font-semibold py-2 px-5 rounded-lg transition-all duration-300 text-sm"
+                  onClick={() => handleMarkAbsent(teamToEvaluate.id)} 
+                  disabled={savingEval}
+                  className="bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 border border-rose-500/30 font-semibold py-2 px-3.5 rounded-lg transition-all duration-200 text-xs flex items-center gap-1.5"
+                  title="Mark this team as Absent"
                 >
-                  Delete Marks
+                  Mark as Absent
                 </button>
-                <button type="submit" disabled={savingEval} className="btn-primary text-sm px-6">
-                  {savingEval ? 'Saving...' : 'Save Evaluation'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => setEvalModalOpen(false)} className="btn-secondary text-xs py-2 px-3">Cancel</button>
+                  {evaluations.some(e => e.team_id === teamToEvaluate.id) && (
+                    <button 
+                      type="button" 
+                      onClick={() => handleDeleteMarks(teamToEvaluate.id)} 
+                      className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 font-semibold py-2 px-3 rounded-lg transition-all text-xs"
+                    >
+                      Delete
+                    </button>
+                  )}
+                  <button type="submit" disabled={savingEval} className="btn-primary text-xs py-2 px-4">
+                    {savingEval ? 'Saving...' : 'Save Evaluation'}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
