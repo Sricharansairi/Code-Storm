@@ -4,6 +4,7 @@ import { Download, FileCheck, ShieldCheck, AlertTriangle, CheckCircle2, Lock, Ar
 import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import jsPDF from 'jspdf';
+import JSZip from 'jszip';
 
 interface CertMemberSlot {
   role: string;
@@ -291,14 +292,15 @@ export default function CertificatePortal() {
     };
   }, [team, certMembers]);
 
-  // Execute One-Time Download (Direct download for all individual certificates without zip)
+  // Execute One-Time Download (All individual certificates packaged in a single ZIP archive)
   const executeOneTimeDownload = async (format: 'pdf' | 'png') => {
     if (!team || isAlreadyDownloaded || downloading) return;
     setDownloading(true);
-    setStatusMessage(`Preparing all ${certMembers.length} ${format.toUpperCase()} certificates (300 DPI)...`);
+    setStatusMessage(`Generating all ${certMembers.length} individual ${format.toUpperCase()} certificates (300 DPI)...`);
     setConfirmModalOpen(false);
 
     try {
+      const zip = new JSZip();
       const teamLabel = team?.team_name ? team.team_name.replace(/[^a-zA-Z0-9_-]/g, '_') : 'Team';
 
       for (let i = 0; i < certMembers.length; i++) {
@@ -306,9 +308,9 @@ export default function CertificatePortal() {
         const roleLabel = i === 0 ? 'Team_Leader' : `Member_${i}`;
         const memName = (m.name || '').trim() || m.role;
         const safeName = memName.replace(/[^a-zA-Z0-9_-]/g, '_') || roleLabel;
-        const filenameBase = `${teamLabel}_${i + 1}_${roleLabel}_${safeName}`;
+        const filenameBase = `${i + 1}_${roleLabel}_${safeName}`;
 
-        setStatusMessage(`Downloading certificate ${i + 1} of ${certMembers.length} (${memName})...`);
+        setStatusMessage(`Processing certificate ${i + 1} of ${certMembers.length} (${memName})...`);
 
         const canvas = await renderCertificateToCanvas(memName);
 
@@ -320,22 +322,23 @@ export default function CertificatePortal() {
           });
           // Embed as lossless PNG so college logos, fine letters, and text remain 100% sharp
           pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, 3300, 2550, undefined, 'FAST');
-          pdf.save(`${filenameBase}.pdf`);
+          const pdfArrayBuffer = pdf.output('arraybuffer');
+          zip.file(`${filenameBase}.pdf`, pdfArrayBuffer);
         } else {
           const pngDataUrl = canvas.toDataURL('image/png');
-          const link = document.createElement('a');
-          link.href = pngDataUrl;
-          link.download = `${filenameBase}.png`;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-        }
-
-        // Small pause between file triggers to ensure smooth multi-file browser downloads
-        if (i < certMembers.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, 400));
+          const base64Data = pngDataUrl.replace(/^data:image\/png;base64,/, '');
+          zip.file(`${filenameBase}.png`, base64Data, { base64: true });
         }
       }
+
+      setStatusMessage(`Compressing all ${certMembers.length} certificates into ZIP archive...`);
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const downloadUrl = URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `CodeStorm2026_All_${certMembers.length}_Certificates_${format.toUpperCase()}_${teamLabel}.zip`;
+      link.click();
+      URL.revokeObjectURL(downloadUrl);
 
       // Record one-time download in Supabase
       let currentScores = evaluation?.scores || {};
@@ -692,7 +695,7 @@ export default function CertificatePortal() {
                 <div className="card p-6 border border-white/10 bg-black/60 backdrop-blur-xl rounded-2xl text-center space-y-3">
                   <h4 className="text-base font-bold text-white">All names verified?</h4>
                   <p className="text-xs text-gray-400 max-w-md mx-auto">
-                    Download all certificates directly to your device at once (no zip extraction needed). Remember, each team can download only once.
+                    Download all certificates packaged together in a ZIP archive. Remember, each team can download only once.
                   </p>
                   <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
                     <button
@@ -703,7 +706,7 @@ export default function CertificatePortal() {
                       disabled={downloading || loadingPreviews}
                       className="bg-white hover:bg-gray-100 text-black px-6 py-3 rounded-xl text-xs font-black inline-flex items-center gap-2 transition-all shadow-xl cursor-pointer disabled:opacity-50 hover:scale-105"
                     >
-                      <FileCheck size={16} /> Download All ({certMembers.length}) PDFs
+                      <FileCheck size={16} /> Download {certMembers.length} PDFs (.zip)
                     </button>
                     <button
                       onClick={() => {
@@ -713,7 +716,7 @@ export default function CertificatePortal() {
                       disabled={downloading || loadingPreviews}
                       className="bg-white/10 hover:bg-white/20 text-white px-6 py-3 rounded-xl text-xs font-bold border border-white/20 inline-flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50 hover:scale-105"
                     >
-                      <Download size={16} /> Download All ({certMembers.length}) PNGs
+                      <Download size={16} /> Download {certMembers.length} PNGs (.zip)
                     </button>
                   </div>
                 </div>
@@ -744,7 +747,7 @@ export default function CertificatePortal() {
                 <AlertTriangle size={13} className="text-white shrink-0" /> Important Notice:
               </div>
               <p className="text-[11px] text-gray-400 leading-relaxed">
-                Each team is strictly allowed to download their official certificate package <strong>ONLY ONCE</strong> in either <strong>PDF</strong> or <strong>PNG</strong> format. All {certMembers.length} certificates will download directly into your downloads folder. Once confirmed, your team's download access will be permanently locked.
+                Each team is strictly allowed to download their official certificate package <strong>ONLY ONCE</strong> in either <strong>PDF</strong> or <strong>PNG</strong> format (.zip). Once confirmed, your team's download access will be permanently locked.
               </p>
             </div>
 
@@ -773,7 +776,7 @@ export default function CertificatePortal() {
                     )}
                   </div>
                   <p className={`text-[10px] ${selectedFormat === 'pdf' ? 'text-gray-800' : 'text-gray-400'}`}>
-                    All {certMembers.length} separate printable .pdf documents downloaded directly
+                    All {certMembers.length} separate printable .pdf documents (.zip)
                   </p>
                 </button>
 
@@ -796,7 +799,7 @@ export default function CertificatePortal() {
                     )}
                   </div>
                   <p className={`text-[10px] ${selectedFormat === 'png' ? 'text-gray-800' : 'text-gray-400'}`}>
-                    All {certMembers.length} separate ultra-sharp 300 DPI .png images downloaded directly
+                    All {certMembers.length} separate ultra-sharp 300 DPI .png images (.zip)
                   </p>
                 </button>
               </div>
@@ -833,11 +836,11 @@ export default function CertificatePortal() {
                 className="px-5 py-2.5 rounded-xl text-xs font-bold bg-white text-black hover:bg-gray-100 transition-colors cursor-pointer shadow-lg flex items-center gap-2"
               >
                 {downloading ? (
-                  <span>Downloading...</span>
+                  <span>Compressing...</span>
                 ) : (
                   <>
                     <Download size={14} />
-                    <span>Confirm & Download All ({certMembers.length}) {selectedFormat.toUpperCase()}s</span>
+                    <span>Confirm & Download {certMembers.length} {selectedFormat.toUpperCase()}s (.zip)</span>
                   </>
                 )}
               </button>
